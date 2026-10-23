@@ -2,3 +2,4 @@
 build/
 TestVideos/
 .DS_Store
+dist/
