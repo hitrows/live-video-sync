@@ -39,6 +39,9 @@ final class NetworkMIDILink: NSObject, NetServiceBrowserDelegate, NetServiceDele
     private var lastStatus = ""
     /// Попытки подключиться к keepConnectedTo: чётные — по имени, нечётные — по IP
     private var attempts = 0
+    /// Раньше этого не пробуем снова: рукопожатию нужно время, а каждая запись настроек сбрасывает подключения сеанса
+    private var nextAttempt = Date.distantPast
+    static let retryInterval: TimeInterval = 10
     /// С какого момента подключение висит в непонятном состоянии
     private var stuckSince: [String: Date] = [:]
     private static let goodStates: Set<String> = ["connected", "running"]
@@ -147,6 +150,7 @@ final class NetworkMIDILink: NSObject, NetServiceBrowserDelegate, NetServiceDele
     /// byIP — подключаться по запомненному IP вместо имени .local
     func connect(_ peer: Peer, byIP: Bool = false) {
         guard let settings = readSettings() else { return }
+        nextAttempt = Date().addingTimeInterval(Self.retryInterval)
         let address = byIP ? (peer.ip ?? peer.address) : peer.address
         var list = (settings["peers"] as? [NSDictionary]) ?? []
         if !list.contains(where: { ($0["address"] as? String) == address }) {
@@ -204,7 +208,8 @@ final class NetworkMIDILink: NSObject, NetServiceBrowserDelegate, NetServiceDele
         let current = connections
         stuckSince = stuckSince.filter { key, _ in current.contains { $0.address == key } }
 
-        if let target = keepConnectedTo, !isConnected(target) {
+        if let target = keepConnectedTo, !isConnected(target), now >= nextAttempt {
+            nextAttempt = now.addingTimeInterval(Self.retryInterval)
             // Адрес мог поменяться — берём свежий из сети, если Mac виден; IP помним из прошлого раза
             var fresh = peers.first { $0.name == target.name } ?? target
             if fresh.ip == nil { fresh.ip = target.ip }
@@ -212,8 +217,9 @@ final class NetworkMIDILink: NSObject, NetServiceBrowserDelegate, NetServiceDele
             attempts += 1
             log("Связи с «\(target.name)» нет — подключаюсь \(byIP ? "по IP" : "по имени")")
             connect(fresh, byIP: byIP)
-        } else if keepConnectedTo != nil {
+        } else if let target = keepConnectedTo, isConnected(target) {
             attempts = 0
+            nextAttempt = now.addingTimeInterval(Self.retryInterval)
         }
         onChange?()
     }
