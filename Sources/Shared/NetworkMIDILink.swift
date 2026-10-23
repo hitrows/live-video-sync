@@ -12,7 +12,8 @@ import Foundation
 final class NetworkMIDILink: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
     struct Peer: Equatable {
         let name: String
-        /// «хост.local:порт»
+        /// Адрес как у Audio MIDI Setup — по имени сервиса Bonjour: «\tИмя Mac\tlocal.».
+        /// Драйвер сам находит Mac по имени; «хост.local:порт» между ноутбуками не устанавливался
         let address: String
         /// «IP:порт» — запасной вариант, если имя .local в сети не находится (изоляция клиентов, мультикаст)
         var ip: String?
@@ -42,6 +43,9 @@ final class NetworkMIDILink: NSObject, NetServiceBrowserDelegate, NetServiceDele
     /// Раньше этого не пробуем снова: рукопожатию нужно время, а каждая запись настроек сбрасывает подключения сеанса
     private var nextAttempt = Date.distantPast
     static let retryInterval: TimeInterval = 10
+    /// Драйвер иногда на пару секунд «теряет» живое подключение из списка — переподключаемся, только если его нет столько секунд подряд
+    static let missingGrace: TimeInterval = 30
+    private var lastSeenConnected = Date.distantPast
     /// С какого момента подключение висит в непонятном состоянии
     private var stuckSince: [String: Date] = [:]
     private static let goodStates: Set<String> = ["connected", "running"]
@@ -208,7 +212,9 @@ final class NetworkMIDILink: NSObject, NetServiceBrowserDelegate, NetServiceDele
         let current = connections
         stuckSince = stuckSince.filter { key, _ in current.contains { $0.address == key } }
 
-        if let target = keepConnectedTo, !isConnected(target), now >= nextAttempt {
+        if let target = keepConnectedTo, isConnected(target) { lastSeenConnected = now }
+        if let target = keepConnectedTo, !isConnected(target), now >= nextAttempt,
+           now.timeIntervalSince(lastSeenConnected) > Self.missingGrace {
             nextAttempt = now.addingTimeInterval(Self.retryInterval)
             // Адрес мог поменяться — берём свежий из сети, если Mac виден; IP помним из прошлого раза
             var fresh = peers.first { $0.name == target.name } ?? target
@@ -225,6 +231,11 @@ final class NetworkMIDILink: NSObject, NetServiceBrowserDelegate, NetServiceDele
     }
 
     // MARK: - Поиск в сети (Bonjour)
+
+    /// Адрес сервиса в формате драйвера: «\tИмя\tlocal.»
+    static func serviceAddress(_ name: String, domain: String = "local.") -> String {
+        "\t\(name)\t\(domain.isEmpty ? "local." : domain)"
+    }
 
     /// IPv4-адрес из ответа Bonjour
     private static func ipv4(_ service: NetService) -> String? {
@@ -258,7 +269,8 @@ final class NetworkMIDILink: NSObject, NetServiceBrowserDelegate, NetServiceDele
         let host = hostName.hasSuffix(".") ? String(hostName.dropLast()) : hostName
         let ownHost = ProcessInfo.processInfo.hostName.lowercased()
         if host.lowercased() == ownHost || sender.name == ownName { return }
-        let peer = Peer(name: sender.name, address: "\(host):\(sender.port)", ip: Self.ipv4(sender).map { "\($0):\(sender.port)" })
+        let peer = Peer(name: sender.name, address: Self.serviceAddress(sender.name, domain: sender.domain),
+                        ip: Self.ipv4(sender).map { "\($0):\(sender.port)" })
         if let i = peers.firstIndex(where: { $0.name == peer.name }) {
             if peers[i] == peer { return }
             peers[i] = peer

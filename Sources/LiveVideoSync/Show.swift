@@ -102,7 +102,11 @@ final class Show: ObservableObject {
         var list = link.peers.map { LinkTarget(name: $0.name, address: $0.address, ip: $0.ip) }
         if let saved = settings.logicMac {
             if let found = list.first(where: { $0.name == saved.name }) {
-                // Запомнить свежий IP Logic Mac — пригодится, если имя .local перестанет находиться
+                // Запомнить свежий адрес и IP Logic Mac (IP пригодится, если поиск по имени перестанет работать)
+                if found.address != saved.address {
+                    settings.logicMac?.address = found.address
+                    link.keepConnectedTo = NetworkMIDILink.Peer(name: found.name, address: found.address, ip: found.ip ?? saved.ip)
+                }
                 if let ip = found.ip, ip != saved.ip {
                     settings.logicMac?.ip = ip
                     link.keepConnectedTo?.ip = ip

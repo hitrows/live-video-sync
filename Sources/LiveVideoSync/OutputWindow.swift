@@ -50,12 +50,18 @@ final class OutputController {
     private var window: NSWindow?
     private var windowIsTest = false
     private var applyScheduled = false
+    private var lastScreenList = OutputController.screenList()
 
     init(engine: VideoEngine) {
         self.engine = engine
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                object: nil, queue: .main) { [weak self] _ in
-            Log.info("Экраны изменились: \(Self.screenList())")
+            // macOS может слать это десятки раз в секунду (переходник, проектор ищет сигнал) — пишем только реальные изменения
+            let list = Self.screenList()
+            if list != self?.lastScreenList {
+                Log.info("Экраны изменились: \(list)")
+                self?.lastScreenList = list
+            }
             self?.scheduleApply()
         }
         // После сна экраны иногда переподключаются позже

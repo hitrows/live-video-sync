@@ -164,6 +164,10 @@ final class Controller: NSObject {
 
     private func refresh() {
         // Свежий IP выбранного Mac — запомнить про запас
+        if let saved = savedTarget, let found = link.peers.first(where: { $0.name == saved.name }), found.address != saved.address {
+            defaults.set(found.address, forKey: "targetAddress")
+            link.keepConnectedTo = NetworkMIDILink.Peer(name: found.name, address: found.address, ip: found.ip ?? saved.ip)
+        }
         if let saved = savedTarget, let found = link.peers.first(where: { $0.name == saved.name }),
            let ip = found.ip, ip != saved.ip {
             defaults.set(ip, forKey: "targetIP")
