@@ -119,6 +119,13 @@ final class Show: ObservableObject {
         if list != linkChoices { linkChoices = list }
     }
 
+    /// Аварийный ручной запуск видео: до конца, потом логотип
+    func playManually(_ song: VideoFile) {
+        director.playManually(song.id, at: HostTime.now)
+        manualLogo = false
+        Log.info("Ручной запуск: \(song.name)")
+    }
+
     func toggleBlackout() {
         director.manualBlack.toggle()
         manualBlack = director.manualBlack
@@ -126,6 +133,7 @@ final class Show: ObservableObject {
     }
 
     func toggleLogo() {
+        director.stopManual()
         director.manualLogo.toggle()
         manualLogo = director.manualLogo
         Log.info("Ручной логотип: \(manualLogo ? "вкл" : "выкл")")

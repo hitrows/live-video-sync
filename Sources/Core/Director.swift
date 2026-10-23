@@ -27,6 +27,9 @@ final class Director {
     var manualBlack = false
     /// Ручной логотип; сбрасывается новой нотой-меткой или стартом воспроизведения
     var manualLogo = false
+    /// Ручной запуск видео кнопкой (аварийный режим): важнее таймкода, до конца видео,
+    /// потом логотип. Сбрасывается кнопкой Logo, нотой-меткой или новым стартом воспроизведения.
+    private(set) var manualPlay: (id: Int, host: Double)?
     /// Выучено начало песни: (id, позиция MTC)
     var onCueLearned: ((Int, Double) -> Void)?
 
@@ -47,6 +50,16 @@ final class Director {
     func id(forNote note: Int) -> Int { note - markerBaseNote + 1 }
     func note(forId id: Int) -> Int { markerBaseNote + id - 1 }
 
+    func playManually(_ id: Int, at now: Double) {
+        guard cues[id] != nil else { return }
+        manualPlay = (id, now)
+        manualLogo = false
+    }
+
+    func stopManual() {
+        manualPlay = nil
+    }
+
     func handle(_ event: MIDIEvent, host: Double) {
         lastMessageHost = host
         switch event {
@@ -57,6 +70,7 @@ final class Director {
                 decoder.reset()
                 stoppedByMMC = false
                 manualLogo = false
+                manualPlay = nil
                 playbackStartHost = host
             }
             clock.noteQuarterFrame(host: host)
@@ -72,6 +86,7 @@ final class Director {
             let id = id(forNote: Int(note))
             guard cues[id] != nil else { return }
             manualLogo = false
+            manualPlay = nil
             if clock.isReceiving(at: host) {
                 if let pos = clock.position(at: host) {
                     learnIfMarker(id, at: pos, host: host)
@@ -139,6 +154,16 @@ final class Director {
 
     func output(at now: Double) -> ShowOutput {
         if manualBlack { return .black }
+        if let manual = manualPlay, let cue = cues[manual.id] {
+            let position = now - manual.host
+            if position < visibleEnd(cue) {
+                lastSongId = manual.id
+                return .song(id: manual.id, position: position, locked: false)
+            }
+            // Ручное видео кончилось — логотип и остаётся
+            manualPlay = nil
+            manualLogo = true
+        }
         if manualLogo { return .logo }
 
         if let pos = clock.position(at: now) {

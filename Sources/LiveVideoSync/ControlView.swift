@@ -174,6 +174,11 @@ struct ControlView: View {
     private var songsTable: some View {
         VStack(alignment: .leading, spacing: 6) {
             Table(show.songs) {
+                TableColumn("") { song in
+                    Button { show.playManually(song) } label: { Image(systemName: "play.fill") }
+                        .buttonStyle(.borderless)
+                        .help("Play this video now (manual, emergency)")
+                }.width(24)
                 TableColumn("#") { Text("\($0.id)").monospacedDigit() }.width(30)
                 TableColumn("File") { Text($0.name).lineLimit(1) }
                 TableColumn("Length") { Text(Show.clock($0.duration)).monospacedDigit() }.width(70)

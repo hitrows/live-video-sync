@@ -312,6 +312,32 @@ do {
     check(d.output(at: logic.now).isSong(1), "Ручной логотип сбрасывается стартом воспроизведения")
 }
 
+// 7. Ручной запуск видео кнопкой
+do {
+    let d = makeDirector()
+    let logic = FakeLogic(d)
+    d.cues[2]!.start = 3700
+    logic.position = 3705
+    logic.play()
+    logic.advance(1)
+    d.playManually(3, at: logic.now)
+    logic.advance(2)
+    if case .song(3, let pos, false) = d.output(at: logic.now) {
+        check(approx(pos, 2, 0.02), "Ручной: видео 3 с начала, важнее таймкода: \(pos)")
+    } else { check(false, "Ручной: должна идти песня 3: \(d.output(at: logic.now))") }
+    logic.advance(10)
+    check(d.output(at: logic.now) == .logo, "Ручной: видео кончилось — логотип")
+    logic.advance(5)
+    check(d.output(at: logic.now) == .logo, "Ручной: логотип остаётся, хотя таймкод идёт")
+    // Новый старт воспроизведения в Logic возвращает управление
+    logic.stop()
+    logic.advance(1)
+    logic.position = 3702
+    logic.play()
+    logic.advance(1)
+    check(d.output(at: logic.now).isSong(2, locked: true), "Ручной: новый Play в Logic — снова по таймкоду")
+}
+
 extension ShowOutput {
     func isSong(_ id: Int, locked: Bool? = nil) -> Bool {
         if case .song(let i, _, let l) = self { return i == id && (locked == nil || locked == l) }
