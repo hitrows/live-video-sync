@@ -180,14 +180,19 @@ final class NetworkMIDILink: NSObject, NetServiceBrowserDelegate, NetServiceDele
     }
 
     private func maintain() {
-        let status = connections.map { "\($0.name) \($0.state)" }.joined(separator: ", ")
+        let status = connections.map { "\($0.name) [\($0.address)] \($0.state.isEmpty ? "—" : $0.state)" }.joined(separator: ", ")
         if status != lastStatus {
             log("Подключения: \(status.isEmpty ? "нет" : status)")
             lastStatus = status
         }
         // Подключение долго в непонятном состоянии (адрес не отвечает) — убрать, дальше попробуем другой адрес
         let now = Date()
-        for c in connections where !Self.goodStates.contains(c.state) && !c.state.isEmpty {
+        // Только своё подключение к keepConnectedTo — чужие (другой плеер, входящие) не трогаем никогда
+        let mine: (Connection) -> Bool = { [keepConnectedTo] c in
+            guard let t = keepConnectedTo else { return false }
+            return c.address == t.address || (t.ip != nil && c.address == t.ip)
+        }
+        for c in connections where mine(c) && !Self.goodStates.contains(c.state) && !c.state.isEmpty {
             let since = stuckSince[c.address] ?? now
             stuckSince[c.address] = since
             if now.timeIntervalSince(since) > 10 {
