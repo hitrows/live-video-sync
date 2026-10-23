@@ -207,7 +207,8 @@ final class Controller: NSObject {
             statusDot.textColor = .systemRed
             statusLabel.stringValue = "Not connected"
         } else {
-            let ok = connections.contains { $0.state == "connected" || $0.state == "running" }
+            // Big Sur не сообщает состояние подключения (пусто) — это нормальное живое подключение
+            let ok = connections.contains { $0.state.isEmpty || $0.state == "connected" || $0.state == "running" }
             statusDot.textColor = ok ? .systemGreen : .systemOrange
             statusLabel.stringValue = "Connected to " + connections.map(\.name).joined(separator: ", ")
         }
