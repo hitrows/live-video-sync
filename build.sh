@@ -15,6 +15,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 mv build/LiveVideoSync "$APP/Contents/MacOS/LiveVideoSync"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+mkdir -p "$APP/Contents/Resources"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 codesign --force --sign - "$APP"
 
 xcrun swiftc -O -swift-version 5 -target "$TARGET" -module-name MTCEmulator \

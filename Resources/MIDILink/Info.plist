@@ -8,6 +8,8 @@
 	<string>com.sila.midilink</string>
 	<key>CFBundleName</key>
 	<string>MIDI Link</string>
+	<key>CFBundleIconFile</key>
+	<string>MIDILink</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
