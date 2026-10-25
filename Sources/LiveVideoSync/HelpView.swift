@@ -45,14 +45,14 @@ struct HelpView: View {
                 section("Mac с видео — настройка (один раз)") {
                     step(1, "Сетевой MIDI-сеанс — так же, как на Mac с Logic: **Audio MIDI Setup** → **Window** → **Show MIDI Studio** → **Network** → **+** → галочка у сеанса.")
                     step(2, "Первый запуск программы: правый клик по Live Video Sync → **Open** → **Open**. Если не открывается — **System Settings** → **Privacy & Security** → **Open Anyway**. На вопрос о локальной сети — **Allow**.")
-                    step(3, "**Live Video Sync** → **Settings…** (**Cmd+,**):\n• **Logic** → **Mac with Logic** — выбери MacBook. Программа запомнит его и будет сама переподключаться;\n• **Output** → **Display** — экран сцены (обычно First external display), **Logo** — видео логотипа, **While the Player Restarts** — картинка на экране сцены на время перезапуска после сбоя.")
+                    step(3, "**Live Video Sync** → **Settings…** (**Cmd+,**):\n• **Sync** → **Source Mac** — выбери MacBook (Mac, с которого идут таймкод и ноты: Logic, Ableton …). Программа запомнит его и будет сама переподключаться;\n• **Output** → **Display** — экран сцены (обычно First external display), **Logo** — видео логотипа, **While the Player Restarts** — картинка на экране сцены на время перезапуска после сбоя.")
                     step(4, "Собери сет-лист и нажми **Go Live** справа вверху. При следующем запуске вывод включится сам.")
                 }
 
                 section("Перед концертом — чек-лист") {
                     bullet("Mac с видео на зарядке, проектор подключён. **System Settings** → **Displays** — расширенный рабочий стол, не **Mirror**.")
                     bullet("Включён **Focus** → **Do Not Disturb** (уведомления программа отключить не может).")
-                    bullet("Оба Mac в одной Wi-Fi сети (5 ГГц). Внизу Now Playing — зелёная точка «Logic: … · connected».")
+                    bullet("Оба Mac в одной Wi-Fi сети (5 ГГц). Внизу Now Playing — зелёная точка «Source: … · connected».")
                     bullet("MIDI Link и Audio MIDI Setup на Mac с Logic закрыты.")
                     bullet("В Logic все MIDI-устройства проекта подключены (пульт, педали). Иначе при любом сбое сети Logic покажет окно «MIDI port … no longer exists», и пока оно открыто, **автостоп не срабатывает**.")
                     bullet("Нужный сет — **Active**. В заголовке окна «LIVE · <экран>», на экране — логотип.")
@@ -62,8 +62,8 @@ struct HelpView: View {
                 }
 
                 section("Если что-то не работает") {
-                    problem("«Logic: … connection lost» или «Waiting for Logic»",
-                            "• Оба Mac в одной сети Wi-Fi?\n• **Settings** → **Logic** → **Mac with Logic** выбран? Можно нажать **Reconnect Now** в баннере. Или на Mac с Logic: **MIDI Link** → **Connect**.\n• В **Audio MIDI Setup** → **Network** у сеанса стоит галочка (на обоих Mac)?\n• На роутере должна быть выключена изоляция клиентов (**AP isolation / Client isolation**).\n• Программа сама пробует подключиться каждые 2 с — по имени и по запомненному IP.")
+                    problem("«Source: … connection lost» или «Waiting for timecode»",
+                            "• Оба Mac в одной сети Wi-Fi?\n• **Settings** → **Sync** → **Source Mac** выбран? Можно нажать **Reconnect Now** в баннере. Или на Mac с Logic: **MIDI Link** → **Connect**.\n• В **Audio MIDI Setup** → **Network** у сеанса стоит галочка (на обоих Mac)?\n• На роутере должна быть выключена изоляция клиентов (**AP isolation / Client isolation**).\n• Программа сама пробует подключиться каждые 2 с — по имени и по запомненному IP.")
                     problem("Баннер «This Mac has no network MIDI session»",
                             "На этом Mac нет сетевого сеанса: **Open Audio MIDI Setup** в баннере → **Network** → **+** → галочка. Один раз.")
                     problem("Связь есть, но таймкод не идёт",

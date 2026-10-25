@@ -152,7 +152,7 @@ struct NowPlayingPanel: View {
                 if show.isManual {
                     Button("Resume Sync", action: show.resumeSync)
                         .buttonStyle(.borderedProminent)
-                        .help("Back to what Logic plays now (⌘R)")
+                        .help("Back to what the source plays now (⌘R)")
                 } else {
                     Button("Resume Sync", action: show.resumeSync)
                         .disabled(true)
@@ -179,12 +179,12 @@ struct NowPlayingPanel: View {
         switch n.mode {
         case .locked:
             return "Locked to MTC" + (n.drift.map { String(format: " · drift %+d ms", $0) } ?? "")
-        case .free: return "Playing on its own — no timecode from Logic"
+        case .free: return "Playing on its own — no timecode from the source"
         case .manual: return "Manual — plays to the end, then the logo"
         case .extras:
             let source = n.extrasSource ?? "Extras"
             return n.isImage ? "\(source) · image" : source
-        case .logo: return show.manualLogo ? "Logo — held until Resume Sync" : "Waiting for a song from Logic"
+        case .logo: return show.manualLogo ? "Logo — held until Resume Sync" : "Waiting for a song from the source"
         case .black: return "Blackout — held until Resume Sync"
         }
     }

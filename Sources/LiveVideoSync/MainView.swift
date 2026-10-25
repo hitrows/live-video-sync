@@ -72,7 +72,7 @@ struct MainView: View {
         }
         if let preset = show.venuePresetName { parts.append("preset «\(preset)»") }
         switch show.logic.state {
-        case .lost: parts.append("Logic not connected")
+        case .lost: parts.append("Source not connected")
         case .noSession: parts.append("No network MIDI session")
         default: break
         }
@@ -255,13 +255,13 @@ struct Banners: View {
             }
             if show.logic.state == .noSession {
                 Banner(symbol: "pianokeys",
-                       text: "This Mac has no network MIDI session, so Logic can’t reach it. In Audio MIDI Setup → Network, press + under My Sessions and tick it — once.",
+                       text: "This Mac has no network MIDI session, so the source Mac can’t reach it. In Audio MIDI Setup → Network, press + under My Sessions and tick it — once.",
                        button: "Open Audio MIDI Setup") {
                     NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Audio MIDI Setup.app"))
                 }
             } else if show.logic.state == .lost {
                 Banner(symbol: "wifi.exclamationmark",
-                       text: "No signal from Logic. The current video keeps playing to the end, then the logo. Reconnecting automatically…",
+                       text: "No timecode from the source Mac. The current video keeps playing to the end, then the logo. Reconnecting automatically…",
                        button: show.settings.logicMac == nil ? nil : "Reconnect Now") {
                     if let mac = show.settings.logicMac { show.connectLogic(mac) }
                 }

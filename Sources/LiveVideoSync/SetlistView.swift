@@ -52,7 +52,7 @@ private struct SetlistHeader: View {
                         .padding(.horizontal, 9)
                         .padding(.vertical, 3)
                         .background(.quaternary, in: Capsule())
-                        .help("This setlist plays when Logic sends timecode and marker notes")
+                        .help("This setlist plays when the source sends timecode and marker notes")
                 } else {
                     Button("Make Active") { show.makeActive(setlist.id) }
                         .buttonStyle(.borderedProminent)
@@ -334,8 +334,8 @@ private struct TrackRow: View {
             .padding(.vertical, 1)
             .background(RoundedRectangle(cornerRadius: 3).fill(.quaternary.opacity(learned ? 1 : 0.5)))
             .help(learned
-                  ? "Marker note. Learned: the song starts at \(Timecode(realSeconds: item.marker!, rate: show.director.clock.rate).text) in Logic."
-                  : "Marker note. Not learned yet — play this song from its start in Logic once.")
+                  ? "Marker note. Learned: the song starts at \(Timecode(realSeconds: item.marker!, rate: show.director.clock.rate).text) in the project."
+                  : "Marker note. Not learned yet — play this song from its start once.")
     }
 
     @ViewBuilder

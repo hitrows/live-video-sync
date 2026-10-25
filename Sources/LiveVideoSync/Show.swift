@@ -50,11 +50,11 @@ struct LogicStatus: Equatable {
     /// «Logic: MacBook Pro Hitrows · connected · 01:07:32:14 · 24 fps»
     var line: String {
         switch state {
-        case .noSession: return "Waiting for Logic · no network MIDI session"
-        case .waiting: return macName.map { "Logic: \($0) · connecting…" } ?? "Waiting for Logic"
-        case .lost: return "Logic: \(macName ?? "Logic Mac") · connection lost"
+        case .noSession: return "Waiting for timecode · no network MIDI session"
+        case .waiting: return macName.map { "Source: \($0) · connecting…" } ?? "Waiting for timecode"
+        case .lost: return "Source: \(macName ?? "source Mac") · connection lost"
         case .connected:
-            var parts = ["Logic: \(macName ?? "connected")", "connected"]
+            var parts = ["Source: \(macName ?? "connected")", "connected"]
             if let timecode { parts.append(timecode) }
             if let fps { parts.append(fps) }
             return parts.joined(separator: " · ")

@@ -10,7 +10,7 @@ struct SettingsView: View {
             GeneralSettings(show: show)
                 .tabItem { Label("General", systemImage: "gearshape") }
             LogicSettings(show: show)
-                .tabItem { Label("Logic", systemImage: "pianokeys") }
+                .tabItem { Label("Sync", systemImage: "arrow.triangle.2.circlepath") }
             OutputSettings(show: show)
                 .tabItem { Label("Output", systemImage: "display") }
             HelpSettings()
@@ -115,13 +115,13 @@ private struct LogicSettings: View {
 
     var body: some View {
         Form {
-            Section("Logic Mac") {
+            Section("Source") {
                 Picker(selection: Binding(get: { show.settings.logicMac },
                                           set: { if let t = $0 { show.connectLogic(t) } else { show.disconnectLogic() } })) {
                     Text("None").tag(LinkTarget?.none)
                     ForEach(show.linkChoices, id: \.self) { Text($0.name).tag(Optional($0)) }
                 } label: {
-                    RowLabel("Mac with Logic", connectionText)
+                    RowLabel("Source Mac", connectionText)
                 }
                 LabeledContent {
                     Text(show.hasMIDISession ? show.midiSessionName : "None")
@@ -134,10 +134,10 @@ private struct LogicSettings: View {
                 LabeledContent {
                     Text(show.logic.fps ?? "—").foregroundStyle(.secondary)
                 } label: {
-                    RowLabel("Frame rate", "Taken from Logic. Use 24 or 25 in Project Settings → Synchronization.")
+                    RowLabel("Frame rate", "Taken from the source. Use 24 or 25 (in Logic: Project Settings → Synchronization).")
                 }
                 Toggle(isOn: $show.settings.acceptOnlyLogic) {
-                    RowLabel("Accept MIDI only from Logic Mac", "Ignore USB and other MIDI devices on this Mac")
+                    RowLabel("Accept MIDI only from Source Mac", "Ignore USB and other MIDI devices on this Mac")
                 }
                 .toggleStyle(.switch)
             }
@@ -149,7 +149,7 @@ private struct LogicSettings: View {
     private var connectionText: String {
         switch show.logic.state {
         case .connected: return "Connected · reconnects by itself"
-        case .waiting: return show.settings.logicMac == nil ? "Choose the Mac that runs Logic" : "Connecting…"
+        case .waiting: return show.settings.logicMac == nil ? "Choose the Mac that sends timecode (Logic, Ableton …)" : "Connecting…"
         case .lost: return "Connection lost · reconnecting…"
         case .noSession: return "No network MIDI session on this Mac"
         }
@@ -205,7 +205,7 @@ private struct OutputSettings: View {
                     Button("Choose…", action: show.chooseLogo)
                 } label: {
                     RowLabel(show.settings.logoPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No logo",
-                             "Loops between songs and after Stop in Logic")
+                             "Loops between songs and after Stop on the source")
                 }
             }
             Section("While the Player Restarts") {
@@ -300,7 +300,7 @@ private struct HelpSettings: View {
                 LabeledContent {
                     Button("Open Help") { HelpWindow.show() }
                 } label: {
-                    RowLabel("Setup and troubleshooting", "Logic, network MIDI, the stage display, the checklist before a show")
+                    RowLabel("Setup and troubleshooting", "The source Mac, network MIDI, the stage display, the checklist before a show")
                 }
                 LabeledContent {
                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([Log.url]) }
