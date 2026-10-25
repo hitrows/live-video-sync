@@ -136,6 +136,10 @@ private struct LogicSettings: View {
                 } label: {
                     RowLabel("Frame rate", "Taken from Logic. Use 24 or 25 in Project Settings → Synchronization.")
                 }
+                Toggle(isOn: $show.settings.acceptOnlyLogic) {
+                    RowLabel("Accept MIDI only from Logic Mac", "Ignore USB and other MIDI devices on this Mac")
+                }
+                .toggleStyle(.switch)
             }
         }
         .formStyle(.grouped)
@@ -154,6 +158,16 @@ private struct LogicSettings: View {
 
 private struct OutputSettings: View {
     @ObservedObject var show: Show
+    @State private var modes: [DisplayModeRef] = []
+    @State private var pending: Pending?
+
+    /// Пробный режим, ждущий Keep / Revert
+    struct Pending {
+        let wanted: DisplayModeRef?
+        let previous: DisplayModeRef?
+        let screen: NSScreen
+        var secondsLeft: Int
+    }
 
     var body: some View {
         Form {
@@ -168,9 +182,23 @@ private struct OutputSettings: View {
                 } label: {
                     RowLabel("Display", "Found again by itself when plugged back in")
                 }
+                Picker(selection: resolutionBinding) {
+                    Text("Default").tag(DisplayModeRef?.none)
+                    ForEach(modes, id: \.self) { Text($0.title).tag(Optional($0)) }
+                } label: {
+                    RowLabel("Resolution", show.stageScreen == nil ? "The stage display is not connected"
+                                                                   : "Modes the display reports, including hidden ones")
+                }
+                .disabled(show.stageScreen == nil)
                 Picker("Scale", selection: Binding(get: { show.settings.scale }, set: { show.setScale($0) })) {
                     ForEach(ScaleMode.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
+                Toggle(isOn: $show.settings.hideDock) {
+                    RowLabel("Hide Dock on stage display", "The Dock never slides up over the video")
+                }
+                .toggleStyle(.switch)
+                Toggle("Hide pointer", isOn: $show.settings.hidePointer)
+                    .toggleStyle(.switch)
             }
             Section("Logo") {
                 LabeledContent {
@@ -180,9 +208,78 @@ private struct OutputSettings: View {
                              "Loops between songs and after Stop in Logic")
                 }
             }
+            Section("While the Player Restarts") {
+                Picker(selection: $show.settings.restartScreen) {
+                    Text("Image").tag(RestartScreen.image)
+                    Text("Black").tag(RestartScreen.black)
+                } label: {
+                    RowLabel("Stage screen shows", "About 1 s after a crash, until the show is back")
+                }
+                if show.settings.restartScreen == .image {
+                    LabeledContent {
+                        Button("Choose…", action: show.chooseRestartImage)
+                    } label: {
+                        RowLabel("Image", show.settings.restartImagePath.map { URL(fileURLWithPath: $0).lastPathComponent }
+                                 ?? "None — black until you choose one")
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
         .fixedSize(horizontal: false, vertical: true)
+        .onAppear(perform: loadModes)
+        .onChange(of: show.settings.display) { _, _ in loadModes() }
+    }
+
+    private func loadModes() {
+        guard let screen = show.stageScreen else {
+            modes = []
+            return
+        }
+        modes = DisplayModes.all(OutputController.displayID(screen)).map(\.ref)
+    }
+
+    private var resolutionBinding: Binding<DisplayModeRef?> {
+        Binding(get: {
+            guard let screen = show.stageScreen else { return nil }
+            return show.settings.resolutions[show.stageKey(screen)]
+        }, set: { wanted in
+            guard let screen = show.stageScreen else { return }
+            let previous = show.tryResolution(wanted, on: screen)
+            askToKeep(Pending(wanted: wanted, previous: previous, screen: screen, secondsLeft: 15))
+        })
+    }
+
+    /// «Keep this resolution?» — без ответа через 15 с режим возвращается сам
+    private func askToKeep(_ p: Pending) {
+        let alert = NSAlert()
+        alert.messageText = "Keep this resolution?"
+        let name = p.screen.localizedName
+        let title = p.wanted?.title ?? "the default resolution"
+        func text(_ left: Int) -> String {
+            "\(name) is now \(title). The previous resolution comes back in \(left) seconds."
+        }
+        alert.informativeText = text(p.secondsLeft)
+        alert.addButton(withTitle: "Keep")
+        alert.addButton(withTitle: "Revert")
+        var left = p.secondsLeft
+        let timer = Timer(timeInterval: 1, repeats: true) { t in
+            left -= 1
+            alert.informativeText = text(left)
+            if left <= 0 {
+                t.invalidate()
+                NSApp.abortModal()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .modalPanel)
+        let response = alert.runModal()
+        timer.invalidate()
+        if response == .alertFirstButtonReturn {
+            show.keepResolution(p.wanted, on: p.screen)
+        } else {
+            show.revertResolution(to: p.previous, on: p.screen)
+        }
+        loadModes()
     }
 
     private var displayRefs: [DisplayRef] {

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Экран для трансляции
@@ -185,6 +186,14 @@ struct Settings: Codable, Equatable {
     var screenFit = ScreenFit()
     var venuePresets: [VenuePreset] = []
     var venuePreset: UUID?
+    /// Разрешение экрана сцены для каждого экрана (ключ — производитель-модель-серийник); нет — Default
+    var resolutions: [String: DisplayModeRef] = [:]
+    /// Каким был режим экрана до программы — вернуть при выходе
+    var originalModes: [String: DisplayModeRef] = [:]
+    /// Обои экрана сцены до программы — вернуть при выходе
+    var previousWallpapers: [String: String] = [:]
+    /// MIDI только из сетевого сеанса с Logic; выкл — ещё и USB-устройства этого Mac
+    var acceptOnlyLogic = true
 
     // Старый формат: одна папка с видео «NN_название» и метки по номерам. Переносится в сет при запуске.
     var legacyFolderPath: String?
@@ -196,6 +205,7 @@ struct Settings: Codable, Equatable {
         case setlists, activeSetlist, logoPath, display, transition, transitionDuration, scale, markerBaseNote
         case live, logicMac, hideDock, hidePointer, restartScreen, restartImagePath, extrasImageDuration
         case playlists, extrasAudioDevice, extrasVolume, screenFit, venuePresets, venuePreset
+        case resolutions, originalModes, previousWallpapers, acceptOnlyLogic
         case legacyFolderPath = "folderPath", legacyMarkers = "markers"
         case crossfade, fadeOut
     }
@@ -223,6 +233,10 @@ struct Settings: Codable, Equatable {
         screenFit = (try? c.decodeIfPresent(ScreenFit.self, forKey: .screenFit)) ?? ScreenFit()
         venuePresets = (try? c.decodeIfPresent([VenuePreset].self, forKey: .venuePresets)) ?? []
         venuePreset = try? c.decodeIfPresent(UUID.self, forKey: .venuePreset)
+        resolutions = (try? c.decodeIfPresent([String: DisplayModeRef].self, forKey: .resolutions)) ?? [:]
+        originalModes = (try? c.decodeIfPresent([String: DisplayModeRef].self, forKey: .originalModes)) ?? [:]
+        previousWallpapers = (try? c.decodeIfPresent([String: String].self, forKey: .previousWallpapers)) ?? [:]
+        acceptOnlyLogic = (try? c.decodeIfPresent(Bool.self, forKey: .acceptOnlyLogic)) ?? true
         legacyFolderPath = try? c.decodeIfPresent(String.self, forKey: .legacyFolderPath)
         legacyMarkers = (try? c.decodeIfPresent([String: [String: Double]].self, forKey: .legacyMarkers)) ?? [:]
         // Старые «crossfade» и «fadeOut» → переход и длительность
@@ -258,6 +272,10 @@ struct Settings: Codable, Equatable {
         try c.encode(screenFit, forKey: .screenFit)
         try c.encode(venuePresets, forKey: .venuePresets)
         try c.encodeIfPresent(venuePreset, forKey: .venuePreset)
+        try c.encode(resolutions, forKey: .resolutions)
+        try c.encode(originalModes, forKey: .originalModes)
+        try c.encode(previousWallpapers, forKey: .previousWallpapers)
+        try c.encode(acceptOnlyLogic, forKey: .acceptOnlyLogic)
         try c.encodeIfPresent(legacyFolderPath, forKey: .legacyFolderPath)
         if !legacyMarkers.isEmpty { try c.encode(legacyMarkers, forKey: .legacyMarkers) }
     }
@@ -280,6 +298,20 @@ enum Store {
     /// Обновляется каждую секунду с главного потока — сторож видит зависание
     static let heartbeatURL = dir.appendingPathComponent("heartbeat")
     static let restartsURL = dir.appendingPathComponent("restarts")
+
+    /// Чёрная картинка для обоев экрана сцены (Settings → Output → While the Player Restarts → Black)
+    static let blackImageURL: URL? = {
+        let url = dir.appendingPathComponent("black.png")
+        if FileManager.default.fileExists(atPath: url.path) { return url }
+        let image = NSImage(size: NSSize(width: 64, height: 64), flipped: false) { rect in
+            NSColor.black.setFill()
+            rect.fill()
+            return true
+        }
+        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              let data = rep.representation(using: .png, properties: [:]) else { return nil }
+        return (try? data.write(to: url)) != nil ? url : nil
+    }()
 
     static func loadSettings() -> Settings {
         guard let data = try? Data(contentsOf: settingsURL) else { return Settings() }

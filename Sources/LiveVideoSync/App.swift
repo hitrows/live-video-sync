@@ -109,6 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        Show.shared.restoreStageScreen()
         Store.markCleanExit()
         Log.info("=== Live Video Sync завершается")
     }

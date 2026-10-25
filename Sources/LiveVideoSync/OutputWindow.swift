@@ -5,6 +5,8 @@ import IOKit.ps
 final class OutputView: NSView {
     let engine: VideoEngine
     private static let blankCursor = NSCursor(image: NSImage(size: NSSize(width: 1, height: 1)), hotSpot: .zero)
+    /// Settings → Output → Hide pointer
+    static var hidePointer = true
 
     init(engine: VideoEngine) {
         self.engine = engine
@@ -27,6 +29,7 @@ final class OutputView: NSView {
     }
 
     override func resetCursorRects() {
+        guard Self.hidePointer else { return }
         addCursorRect(bounds, cursor: Self.blankCursor)
     }
 
@@ -44,6 +47,8 @@ final class OutputController {
     let engine: VideoEngine
     var choice: DisplayChoice = .firstExternal { didSet { if choice != oldValue { apply() } } }
     var live = false { didSet { if live != oldValue { apply() } } }
+    /// Экран сцены найден (подключили, сменился, пошёл эфир) — поставить разрешение и обои
+    var onStageScreen: ((NSScreen) -> Void)?
     /// Где сейчас идёт трансляция (для монитора); nil — нигде
     private(set) var currentTarget: String?
 
@@ -82,6 +87,8 @@ final class OutputController {
     }
 
     func apply() {
+        let target = choice == .window ? nil : Self.targetScreen(for: choice)
+        if let target { onStageScreen?(target) }
         guard live else {
             hide()
             return
@@ -90,7 +97,7 @@ final class OutputController {
             showTestWindow()
             return
         }
-        guard let screen = Self.targetScreen(for: choice) else {
+        guard let screen = target else {
             if currentTarget != nil { Log.info("Экран для трансляции не найден — жду подключения") }
             hide()
             return
@@ -146,10 +153,12 @@ final class OutputController {
             w.setFrame(screen.frame, display: true)
             w.orderFrontRegardless()
             Log.info("Трансляция на экран «\(name)» \(Int(screen.frame.width))×\(Int(screen.frame.height))")
-            moveCursorAway(from: screen)
+            if Self.hidesPointer { moveCursorAway(from: screen) }
         }
         currentTarget = name
     }
+
+    static var hidesPointer: Bool { OutputView.hidePointer }
 
     /// Курсор не должен висеть на экране трансляции
     private func moveCursorAway(from screen: NSScreen) {

@@ -139,6 +139,7 @@ final class Show: ObservableObject {
         link.start()
         preventDisplaySleep()
 
+        output.onStageScreen = { [weak self] screen in self?.stageScreenFound(screen) }
         output.choice = settings.display
         output.live = settings.live
         engine.logo.load(settings.logoPath.map(URL.init(fileURLWithPath:)))
@@ -175,6 +176,108 @@ final class Show: ObservableObject {
         director.resumeSync()
         Log.info("Resume Sync: снова по Logic")
         syncManualState()
+    }
+
+    // MARK: - Экран сцены: разрешение и обои на время перезапуска
+
+    /// Экран сцены, если подключён (для Settings → Output)
+    var stageScreen: NSScreen? {
+        settings.display == .window ? nil : OutputController.targetScreen(for: settings.display)
+    }
+
+    func stageKey(_ screen: NSScreen) -> String {
+        DisplayModes.displayKey(OutputController.ref(for: screen))
+    }
+
+    private func stageScreenFound(_ screen: NSScreen) {
+        let key = stageKey(screen)
+        let id = OutputController.displayID(screen)
+        if let wanted = settings.resolutions[key] {
+            if settings.originalModes[key] == nil, let current = DisplayModes.current(id), current != wanted {
+                settings.originalModes[key] = current
+            }
+            DisplayModes.set(wanted, on: id)
+        }
+        if settings.live { setRestartWallpaper(on: screen) }
+    }
+
+    /// Пробный режим из Settings: ставится сразу, сохраняется только после Keep
+    func tryResolution(_ wanted: DisplayModeRef?, on screen: NSScreen) -> DisplayModeRef? {
+        let key = stageKey(screen)
+        let id = OutputController.displayID(screen)
+        let before = DisplayModes.current(id)
+        if let wanted {
+            if settings.originalModes[key] == nil, let before { settings.originalModes[key] = before }
+            DisplayModes.set(wanted, on: id)
+        } else if let original = settings.originalModes[key] {
+            DisplayModes.set(original, on: id)
+        }
+        return before
+    }
+
+    func keepResolution(_ wanted: DisplayModeRef?, on screen: NSScreen) {
+        let key = stageKey(screen)
+        settings.resolutions[key] = wanted
+        if wanted == nil { settings.originalModes[key] = nil }
+        Log.info("Разрешение экрана сцены: \(wanted?.title ?? "Default") — сохранено")
+    }
+
+    func revertResolution(to mode: DisplayModeRef?, on screen: NSScreen) {
+        guard let mode else { return }
+        DisplayModes.set(mode, on: OutputController.displayID(screen))
+        Log.info("Разрешение экрана сцены возвращено: \(mode.title)")
+    }
+
+    /// Картинка (или чёрное) обоями экрана сцены: если программа упадёт, пока она перезапускается — видно это, а не рабочий стол
+    private func setRestartWallpaper(on screen: NSScreen) {
+        guard let url = restartImageURL else { return }
+        let key = stageKey(screen)
+        let current = NSWorkspace.shared.desktopImageURL(for: screen)
+        guard current?.standardizedFileURL != url.standardizedFileURL else { return }
+        if settings.previousWallpapers[key] == nil, let current { settings.previousWallpapers[key] = current.path }
+        do {
+            try NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: [
+                .imageScaling: NSImageScaling.scaleProportionallyUpOrDown.rawValue,
+                .allowClipping: true,
+                .fillColor: NSColor.black,
+            ])
+            Log.info("Обои экрана сцены: \(url.lastPathComponent)")
+        } catch {
+            Log.info("Не удалось поставить обои экрана сцены: \(error.localizedDescription)")
+        }
+    }
+
+    private var restartImageURL: URL? {
+        if settings.restartScreen == .image, let path = settings.restartImagePath, FileManager.default.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+        return Store.blackImageURL
+    }
+
+    func chooseRestartImage() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.prompt = "Use Image"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        settings.restartImagePath = url.path
+        settings.restartScreen = .image
+        if let screen = stageScreen, settings.live { setRestartWallpaper(on: screen) }
+    }
+
+    /// Штатный выход: вернуть прежние разрешение и обои экрана сцены
+    func restoreStageScreen() {
+        for screen in NSScreen.screens {
+            let key = stageKey(screen)
+            if let original = settings.originalModes[key] {
+                DisplayModes.set(original, on: OutputController.displayID(screen))
+                settings.originalModes[key] = nil
+            }
+            if let path = settings.previousWallpapers[key] {
+                try? NSWorkspace.shared.setDesktopImageURL(URL(fileURLWithPath: path), for: screen, options: [:])
+                settings.previousWallpapers[key] = nil
+                Log.info("Обои экрана «\(screen.localizedName)» возвращены")
+            }
+        }
     }
 
     // MARK: - Screen Fit
@@ -615,6 +718,9 @@ final class Show: ObservableObject {
         engine.crossfade = settings.transition == .crossfade
         engine.scale = settings.scale
         engine.fit = settings.screenFit
+        midi.onlyNetwork = settings.acceptOnlyLogic
+        OutputView.hidePointer = settings.hidePointer
+        NSApp?.presentationOptions = settings.hideDock && settings.live ? [.autoHideDock] : []
         director.fadeOut = d
         director.markerBaseNote = settings.markerBaseNote
         engine.extras.imageDuration = max(1, settings.extrasImageDuration)
@@ -632,6 +738,10 @@ final class Show: ObservableObject {
         applyToEngine()
         output.choice = settings.display
         output.live = settings.live
+        if settings.live, settings.restartScreen != old.restartScreen || settings.restartImagePath != old.restartImagePath || !old.live,
+           let screen = stageScreen {
+            setRestartWallpaper(on: screen)
+        }
         if settings.logoPath != old.logoPath {
             engine.logo.load(settings.logoPath.map(URL.init(fileURLWithPath:)))
             inspectMedia()

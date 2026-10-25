@@ -10,6 +10,15 @@ final class MIDIInput {
     private var client = MIDIClientRef()
     private var port = MIDIPortRef()
     private var connected = Set<MIDIUniqueID>()
+    private var endpoints: [MIDIUniqueID: MIDIEndpointRef] = [:]
+    /// Settings → Logic → Accept MIDI only from Logic Mac: только сетевой сеанс (выкл — и USB-устройства)
+    var onlyNetwork = true {
+        didSet {
+            guard onlyNetwork != oldValue else { return }
+            ignored = []
+            connectAllSources()
+        }
+    }
     private var ignored = Set<MIDIUniqueID>()
     /// Только на потоке CoreMIDI
     private var parser = UMPParser()
@@ -59,7 +68,7 @@ final class MIDIInput {
             var cfName: Unmanaged<CFString>?
             MIDIObjectGetStringProperty(source, kMIDIPropertyDisplayName, &cfName)
             let name = (cfName?.takeRetainedValue() as String?) ?? "?"
-            guard Self.isAllowed(source, name: name) else {
+            guard !onlyNetwork || Self.isAllowed(source, name: name) else {
                 if !ignored.contains(uid) {
                     ignored.insert(uid)
                     Log.info("MIDI: источник «\(name)» не слушаем (не сетевой сеанс)")
@@ -67,6 +76,7 @@ final class MIDIInput {
                 continue
             }
             ids.insert(uid)
+            endpoints[uid] = source
             names.append(name)
             if !connected.contains(uid) {
                 let status = MIDIPortConnectSource(port, source, nil)
@@ -74,7 +84,10 @@ final class MIDIInput {
             }
         }
         for gone in connected.subtracting(ids) {
-            Log.info("MIDI: источник \(gone) пропал")
+            // Источник есть, но его больше не слушаем (сменили настройку) — отключить
+            if let source = endpoints[gone] { MIDIPortDisconnectSource(port, source) }
+            endpoints[gone] = nil
+            Log.info("MIDI: источник \(gone) больше не слушаем")
         }
         connected = ids
         sourceNames = names
