@@ -720,7 +720,6 @@ final class Show: ObservableObject {
         engine.fit = settings.screenFit
         midi.onlyNetwork = settings.acceptOnlyLogic
         OutputView.hidePointer = settings.hidePointer
-        NSApp?.presentationOptions = settings.hideDock && settings.live ? [.autoHideDock] : []
         director.fadeOut = d
         director.markerBaseNote = settings.markerBaseNote
         engine.extras.imageDuration = max(1, settings.extrasImageDuration)
