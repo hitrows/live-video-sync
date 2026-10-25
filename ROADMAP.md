@@ -144,7 +144,7 @@
 - **Переименование в списке** (только отображаемое имя, файл не меняется): выделить строку → **Return** — название становится полем; или **Rename** в меню «•••» / по правому клику (одно и то же меню). Двойной клик — ручной запуск.
 - **Change Marker ▸** в меню «•••»: подменю позиций «1 · C1, 2 · C#1 …» с галочкой у текущей; выбор переносит песню на эту позицию (остальные сдвигаются). Перетаскивание строк тоже меняет позиции и ноты. После переноса — напоминание «передвинь ноту в Logic».
 - **Меню «•••»**: Rename, Trim…, Change Marker ▸ | Replace File…, Reset Marker, Show in Finder | Remove from Setlist (красным). У края окна меню открывается вверх.
-- **Проблема с файлом** — «!» в кружке, как у недоступной песни в Apple Music (не жёлтый треугольник).
+- **Проблема с файлом** — тонкий серый контурный треугольник SF Symbols `exclamationmark.triangle` (как в Finder и Xcode; не жёлтый, не залитый), подсказка при наведении, по щелчку — окно с решением.
 - **Change Marker → Move to Position ▸** (название говорит, что песня переедет).
 
 ## Правки дизайна по гайдам Apple — второй проход (25.10.2026)
@@ -164,7 +164,7 @@
 ## Дизайн — третий проход (25.10.2026)
 - **Нет экрана сцены** — баннер «Stage display not found…» + **Display Settings…**, на превью затемнение «A200 HDMI not connected — waiting for the display», в заголовке «Waiting for display…». Шоу продолжает идти; экран подхватывается сам.
 - **Нет сетевого MIDI-сеанса** — баннер с объяснением и кнопкой **Open Audio MIDI Setup**; вывод работает (логотип), статус «Waiting for Logic». Показывается только когда сеанса нет (не шаг первого запуска).
-- **Файл не найден** — как в Apple Music: «!» у строки, по щелчку окно «The original file could not be found» — **Locate…** (по умолчанию, сверху) / **Cancel**.
+- **Файл не найден** — как в Apple Music: значок ⚠︎ у строки, по щелчку окно «The original file could not be found» — **Locate…** (по умолчанию, сверху) / **Cancel**.
 - **Settings → Output**: Display, Hide Dock on stage display, Hide pointer; «While the Player Restarts»: Stage screen shows (Image / Black) + Image.
 - **Settings → Logic**: Mac with Logic (с состоянием связи), Network MIDI session (только показ), Frame rate (из Logic), Accept MIDI only from Logic Mac.
 - **Меньше дублей**: в Now Playing одна строка статуса Logic (Fade/Venue/Watchdog и Output убраны — они в Settings и на панели); в заголовке окна только «LIVE · A200 HDMI».
