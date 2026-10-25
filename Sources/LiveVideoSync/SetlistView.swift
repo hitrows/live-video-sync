@@ -90,6 +90,7 @@ private struct TrackList: View {
     let search: String
     @State private var selection = Set<UUID>()
     @State private var renaming: UUID?
+    @State private var trimming: SetlistItem?
     @State private var missing: SetlistItem?
     @State private var problem: (item: SetlistItem, text: String)?
 
@@ -140,7 +141,7 @@ private struct TrackList: View {
         List(selection: $selection) {
             ForEach(rows, id: \.item.id) { row in
                 TrackRow(show: show, setlist: setlist, item: row.item, number: row.number,
-                         isActiveSet: isActive, renaming: $renaming,
+                         isActiveSet: isActive, renaming: $renaming, trimming: $trimming,
                          onProblem: { item, info in
                              if info.missing { missing = item } else if let text = info.problem { problem = (item, text) }
                          })
@@ -162,7 +163,7 @@ private struct TrackList: View {
         .alternatingRowBackgrounds(.disabled)
         .contextMenu(forSelectionType: UUID.self) { ids in
             if ids.count == 1, let id = ids.first, let item = setlist.items.first(where: { $0.id == id }) {
-                ItemMenu(show: show, setlist: setlist, item: item, renaming: $renaming)
+                ItemMenu(show: show, setlist: setlist, item: item, renaming: $renaming, trimming: $trimming)
             } else if !ids.isEmpty {
                 Button("Remove from Setlist", role: .destructive) { show.removeItems(ids, from: setlist.id) }
             }
@@ -180,6 +181,14 @@ private struct TrackList: View {
             show.removeItems(selection, from: setlist.id)
             selection = []
         }
+        .sheet(item: $trimming) { item in
+            if let info = show.info(item), info.duration > 0,
+               let n = setlist.items.firstIndex(where: { $0.id == item.id }) {
+                TrimView(item: item, number: n + 1, fullDuration: info.duration) { start, end in
+                    show.setTrim(item.id, in: setlist.id, start: start, end: end)
+                }
+            }
+        }
     }
 }
 
@@ -189,11 +198,12 @@ private struct ItemMenu: View {
     let setlist: Setlist
     let item: SetlistItem
     @Binding var renaming: UUID?
+    @Binding var trimming: SetlistItem?
 
     var body: some View {
         Button("Rename") { renaming = item.id }
-        Button("Trim…") {}
-            .disabled(true)
+        Button("Trim…") { trimming = item }
+            .disabled(show.info(item).map { !$0.playable || $0.isImage } ?? true)
         Menu("Move to Position") {
             ForEach(Array(setlist.items.indices), id: \.self) { i in
                 let label = "\(i + 1) · \(Show.noteName(show.settings.markerBaseNote + i))"
@@ -222,6 +232,7 @@ private struct TrackRow: View {
     let number: Int
     let isActiveSet: Bool
     @Binding var renaming: UUID?
+    @Binding var trimming: SetlistItem?
     let onProblem: (SetlistItem, MediaInfo) -> Void
 
     @State private var hovering = false
@@ -330,7 +341,7 @@ private struct TrackRow: View {
     @ViewBuilder
     private var menuButton: some View {
         Menu {
-            ItemMenu(show: show, setlist: setlist, item: item, renaming: $renaming)
+            ItemMenu(show: show, setlist: setlist, item: item, renaming: $renaming, trimming: $trimming)
         } label: {
             Image(systemName: "ellipsis")
         }

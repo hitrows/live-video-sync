@@ -289,9 +289,13 @@ final class VideoEngine {
     }
 
     private func slotIndex(holding id: Int) -> Int? {
-        // И номер, и файл: после перестановки песен номер 3 — уже другой файл
+        // И номер, и файл, и начало: после перестановки песен номер 3 — уже другой файл,
+        // после Trim — другое начало
         let url = urlForCue(id)
-        return slots.firstIndex { $0.cueId == id && $0.url == url && $0.player.currentItem != nil }
+        let start = startForCue(id)
+        return slots.firstIndex {
+            $0.cueId == id && $0.url == url && abs($0.startOffset - start) < 0.001 && $0.player.currentItem != nil
+        }
     }
 
     /// Свободный слот: не на экране, не уходит в fade-out
