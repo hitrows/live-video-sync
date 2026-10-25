@@ -5,7 +5,7 @@ import SwiftUI
 struct MainView: View {
     @ObservedObject var show: Show
     @ObservedObject var ui: UIState
-    @State private var search = ""
+    private let search = ""
 
     var body: some View {
         NavigationSplitView {
@@ -30,7 +30,6 @@ struct MainView: View {
                 liveButton
             }
         }
-        .modifier(SearchInShow(enabled: ui.mode == .show, text: $search))
     }
 
     @ViewBuilder
@@ -53,8 +52,8 @@ struct MainView: View {
         Group {
             if show.settings.live {
                 Button("Stop Output") { ui.toggleLive(show) }
-                    .buttonStyle(.bordered)
-                    .foregroundStyle(.red)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
             } else {
                 Button("Go Live") { ui.toggleLive(show) }
                     .buttonStyle(.borderedProminent)
@@ -81,20 +80,6 @@ struct MainView: View {
     }
 }
 
-/// Поиск по сет-листу — только на экране Show (в Screen Fit искать нечего)
-private struct SearchInShow: ViewModifier {
-    let enabled: Bool
-    @Binding var text: String
-
-    func body(content: Content) -> some View {
-        if enabled {
-            content.searchable(text: $text, placement: .toolbar, prompt: "Search setlist")
-        } else {
-            content
-        }
-    }
-}
-
 // MARK: - Боковая панель
 
 private struct Sidebar: View {
@@ -114,9 +99,11 @@ private struct Sidebar: View {
                         Text(setlist.name).lineLimit(1)
                         Spacer()
                         if setlist.id == show.settings.activeSetlist {
+                            // Красный — только у того, что сейчас на экране сцены
+                            let onAir = show.settings.live && show.extrasNow == nil
                             Image(systemName: "play.rectangle")
-                                .foregroundStyle(show.settings.live ? .red : .secondary)
-                                .help(show.settings.live ? "Active setlist — on air" : "Active setlist")
+                                .foregroundStyle(onAir ? .red : .secondary)
+                                .help(onAir ? "Active setlist — on air" : "Active setlist")
                         }
                     }
                     .tag(UIState.SidebarItem.setlist(setlist.id))
@@ -138,9 +125,9 @@ private struct Sidebar: View {
                         Text(playlist.name).lineLimit(1)
                         Spacer()
                         if show.extrasNow?.playlist == playlist.id {
-                            Image(systemName: "play.rectangle")
+                            Image(systemName: "speaker.wave.2")
                                 .foregroundStyle(show.settings.live ? .red : .secondary)
-                                .help("Playing now")
+                                .help("Playing now, instead of the setlist")
                         }
                     }
                     .tag(UIState.SidebarItem.playlist(playlist.id))

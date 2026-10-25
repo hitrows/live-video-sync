@@ -47,7 +47,6 @@ private struct PlaylistHeader: View {
             }
             Button { show.playPlaylist(playlist.id) } label: {
                 Label("Play", systemImage: "play.fill")
-                    .padding(.horizontal, 6)
             }
             .buttonStyle(.borderedProminent)
             .disabled(playlist.items.isEmpty)
@@ -230,7 +229,8 @@ private struct PlaylistRow: View {
 
     private var durationText: String {
         guard let info, info.playable else { return "—" }
-        return info.isImage ? "\(Int(show.settings.extrasImageDuration)) s" : Show.minutes(info.duration)
+        // Один вид для картинок и видео: 0:10
+        return Show.minutes(info.isImage ? show.settings.extrasImageDuration : info.duration)
     }
 
     @ViewBuilder
