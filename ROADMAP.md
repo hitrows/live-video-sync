@@ -160,3 +160,12 @@
 - **Окно Settings**: кнопки свернуть/развернуть серые (окно настроек не масштабируется).
 - **Extras**: зона «перетащи файлы» только в пустом плейлисте.
 - Экран вывода везде называется одинаково (например «A200 HDMI»).
+
+## Дизайн — третий проход (25.10.2026)
+- **Нет экрана сцены** — баннер «Stage display not found…» + **Display Settings…**, на превью затемнение «A200 HDMI not connected — waiting for the display», в заголовке «Waiting for display…». Шоу продолжает идти; экран подхватывается сам.
+- **Нет сетевого MIDI-сеанса** — баннер с объяснением и кнопкой **Open Audio MIDI Setup**; вывод работает (логотип), статус «Waiting for Logic». Показывается только когда сеанса нет (не шаг первого запуска).
+- **Файл не найден** — как в Apple Music: «!» у строки, по щелчку окно «The original file could not be found» — **Locate…** (по умолчанию, сверху) / **Cancel**.
+- **Settings → Output**: Display, Hide Dock on stage display, Hide pointer; «While the Player Restarts»: Stage screen shows (Image / Black) + Image.
+- **Settings → Logic**: Mac with Logic (с состоянием связи), Network MIDI session (только показ), Frame rate (из Logic), Accept MIDI only from Logic Mac.
+- **Меньше дублей**: в Now Playing одна строка статуса Logic (Fade/Venue/Watchdog и Output убраны — они в Settings и на панели); в заголовке окна только «LIVE · A200 HDMI».
+- В программе — системные стили текста macOS (основной 13 pt, мелкий не меньше 11 pt).
