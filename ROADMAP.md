@@ -110,9 +110,11 @@
 
 - [x] Show, вариант 1 (сет-лист в боковой панели).
 - [x] **Show v2** — сет-лист в стиле Apple Music, библиотека слева (основной вариант).
-- [ ] Extras — открытый плейлист.
-- [ ] Screen Fit.
-- [ ] Setup.
+- [x] Extras — открытый плейлист «Band Logos».
+- [x] Screen Fit (холст с ручками как в Final Cut + инспектор Transform/Crop/Distort).
+- [x] Setup (в стиле System Settings).
+- [x] Change Duration (обрезка как в Фото).
+- [x] Show v2: наведение на строку (▶), меню «•••», значок активного сета, Extras-плейлисты в боковой панели.
 
 ---
 
