@@ -42,6 +42,8 @@ struct MainView: View {
             FirstLaunchView(show: show, ui: ui)
         } else if let id = ui.selectedSetlist, show.setlist(id) != nil {
             SetlistDetail(show: show, ui: ui, setlistID: id, search: search)
+        } else if let id = ui.selectedPlaylist, show.playlist(id) != nil {
+            PlaylistDetail(show: show, playlistID: id, search: search)
         } else {
             ContentUnavailableView("No Setlist Selected", systemImage: "music.note.list",
                                    description: Text("Choose a setlist in the sidebar."))
@@ -85,8 +87,10 @@ private struct Sidebar: View {
     @ObservedObject var show: Show
     @ObservedObject var ui: UIState
     @State private var renaming: Setlist?
+    @State private var renamingPlaylist: Playlist?
     @State private var newName = ""
     @State private var deleting: Setlist?
+    @State private var deletingPlaylist: Playlist?
 
     var body: some View {
         List(selection: $ui.selection) {
@@ -114,19 +118,44 @@ private struct Sidebar: View {
                     }
                 }
             }
+            Section("Extras") {
+                ForEach(show.settings.playlists) { playlist in
+                    HStack {
+                        Text(playlist.name).lineLimit(1)
+                        Spacer()
+                        if show.extrasNow?.playlist == playlist.id {
+                            Image(systemName: "play.rectangle")
+                                .foregroundStyle(show.settings.live ? .red : .secondary)
+                                .help("Playing now")
+                        }
+                    }
+                    .tag(UIState.SidebarItem.playlist(playlist.id))
+                    .contextMenu {
+                        Button("Play") { show.playPlaylist(playlist.id) }
+                            .disabled(playlist.items.isEmpty)
+                        Button("Rename…") {
+                            newName = playlist.name
+                            renamingPlaylist = playlist
+                        }
+                        Divider()
+                        Button("Delete Playlist…") { deletingPlaylist = playlist }
+                    }
+                }
+            }
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
             HStack {
                 Menu {
                     Button("New Setlist") { ui.newSetlist(show) }
+                    Button("New Playlist") { ui.newPlaylist(show) }
                 } label: {
                     Image(systemName: "plus")
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .help("New setlist")
+                .help("New setlist or Extras playlist")
                 Spacer()
             }
             .padding(10)
@@ -135,6 +164,22 @@ private struct Sidebar: View {
             TextField("Name", text: $newName)
             Button("Rename") { if let s = renaming { show.renameSetlist(s.id, to: newName) } }
             Button("Cancel", role: .cancel) {}
+        }
+        .alert("Rename Playlist", isPresented: Binding(get: { renamingPlaylist != nil }, set: { if !$0 { renamingPlaylist = nil } })) {
+            TextField("Name", text: $newName)
+            Button("Rename") { if let p = renamingPlaylist { show.renamePlaylist(p.id, to: newName) } }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("Delete “\(deletingPlaylist?.name ?? "")”?", isPresented: Binding(get: { deletingPlaylist != nil }, set: { if !$0 { deletingPlaylist = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let p = deletingPlaylist {
+                    show.deletePlaylist(p.id)
+                    if ui.selectedPlaylist == p.id { ui.selection = show.settings.setlists.first.map { .setlist($0.id) } }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The files stay on the disk.")
         }
         .alert("Delete “\(deleting?.name ?? "")”?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
             Button("Delete", role: .destructive) {

@@ -61,6 +61,7 @@ private struct SecondsField: View {
 
 private struct GeneralSettings: View {
     @ObservedObject var show: Show
+    @State private var audioOutputs = AudioDevices.outputs()
 
     var body: some View {
         Form {
@@ -86,6 +87,21 @@ private struct GeneralSettings: View {
                 } label: {
                     RowLabel("First song marker",
                              "Song 1 = \(Show.noteName(show.settings.markerBaseNote)), song 2 = \(Show.noteName(show.settings.markerBaseNote + 1)) … (position in the setlist)")
+                }
+            }
+            Section("Extras") {
+                LabeledContent {
+                    SecondsField(value: $show.settings.extrasImageDuration, range: 1...600, step: 1)
+                } label: {
+                    RowLabel("Image duration", "How long each image shows when a playlist plays")
+                }
+                Picker("Audio output", selection: $show.settings.extrasAudioDevice) {
+                    Text("System Output").tag(String?.none)
+                    ForEach(audioOutputs, id: \.uid) { Text($0.name).tag(Optional($0.uid)) }
+                }
+                LabeledContent("Volume") {
+                    Slider(value: $show.settings.extrasVolume, in: 0...1)
+                        .frame(width: 160)
                 }
             }
         }

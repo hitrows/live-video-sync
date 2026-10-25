@@ -16,6 +16,17 @@ final class UIState: ObservableObject {
         return nil
     }
 
+    var selectedPlaylist: UUID? {
+        if case .playlist(let id) = selection { return id }
+        return nil
+    }
+
+    func newPlaylist(_ show: Show) {
+        let id = show.newPlaylist()
+        mode = .show
+        selection = .playlist(id)
+    }
+
     /// Go Live — сразу; Stop Output — только через подтверждение.
     /// Return окно не закрывает: остановить вывод можно только щелчком, случайно нажать нельзя.
     func toggleLive(_ show: Show) {
@@ -48,14 +59,19 @@ final class UIState: ObservableObject {
         selection = .setlist(id)
     }
 
-    /// File → Add Files… — в открытый сет
+    /// File → Add Files… — в открытый сет или плейлист
     func addFiles(_ show: Show) {
-        guard let id = selectedSetlist ?? show.settings.activeSetlist ?? show.settings.setlists.first?.id else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.movie, .image]
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
         panel.prompt = "Add"
+        if let playlist = selectedPlaylist {
+            guard panel.runModal() == .OK else { return }
+            show.addFiles(panel.urls, toPlaylist: playlist)
+            return
+        }
+        guard let id = selectedSetlist ?? show.settings.activeSetlist ?? show.settings.setlists.first?.id else { return }
         guard panel.runModal() == .OK else { return }
         show.addFiles(panel.urls, to: id)
         selection = .setlist(id)
@@ -133,10 +149,12 @@ private struct FileMenu: View {
     var body: some View {
         Button("New Setlist") { ui.newSetlist(show) }
             .keyboardShortcut("n")
+        Button("New Playlist") { ui.newPlaylist(show) }
+            .keyboardShortcut("n", modifiers: [.command, .shift])
         Divider()
         Button("Add Files…") { ui.addFiles(show) }
             .keyboardShortcut("o")
-            .disabled(show.settings.setlists.isEmpty)
+            .disabled(show.settings.setlists.isEmpty && ui.selectedPlaylist == nil)
     }
 }
 

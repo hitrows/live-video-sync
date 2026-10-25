@@ -73,7 +73,7 @@ struct PreviewPanel: View {
     @ViewBuilder
     private var timeLabel: some View {
         let n = show.nowPlaying
-        if n.number != nil, n.duration > 0 {
+        if n.number != nil, n.duration > 0, n.duration.isFinite {
             Text("\(Show.clock(n.position)) / \(Show.clock(n.duration))")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.white)
@@ -125,7 +125,7 @@ struct NowPlayingPanel: View {
                 .lineLimit(1)
             StatusLine(color: modeColor(n), text: modeText(n))
 
-            if n.number != nil, n.duration > 0 {
+            if n.number != nil, n.duration > 0, n.duration.isFinite {
                 ProgressView(value: min(n.position, n.duration), total: n.duration)
                     .progressViewStyle(.linear)
                     .frame(maxWidth: 280)
@@ -181,6 +181,9 @@ struct NowPlayingPanel: View {
             return "Locked to MTC" + (n.drift.map { String(format: " · drift %+d ms", $0) } ?? "")
         case .free: return "Playing on its own — no timecode from Logic"
         case .manual: return "Manual — plays to the end, then the logo"
+        case .extras:
+            let source = n.extrasSource ?? "Extras"
+            return n.isImage ? "\(source) · image" : source
         case .logo: return show.manualLogo ? "Logo — held until Resume Sync" : "Waiting for a song from Logic"
         case .black: return "Blackout — held until Resume Sync"
         }
@@ -190,7 +193,7 @@ struct NowPlayingPanel: View {
         switch n.mode {
         case .locked: return .green
         case .free: return .orange
-        case .manual, .black: return .blue
+        case .manual, .black, .extras: return .blue
         case .logo: return show.manualLogo ? .blue : .secondary
         }
     }

@@ -398,6 +398,79 @@ do {
     check(d.output(at: logic.now).isSong(1, locked: true), "Resume Sync: после ручного запуска — снова песня 1")
 }
 
+// Extras: держится, пока не придёт новая песня из Logic
+do {
+    let d = makeDirector()
+    let logic = FakeLogic(d)
+    d.cues[1]!.start = 3600
+    d.cues[2]!.start = 3630
+    logic.play()
+    logic.advance(2)
+    check(d.output(at: logic.now).isSong(1, locked: true), "Extras: до запуска — песня 1")
+    d.startExtras(at: logic.now)
+    check(d.output(at: logic.now) == .extras, "Extras: поверх играющей песни 1 — Extras")
+    logic.advance(5)
+    check(d.output(at: logic.now) == .extras, "Extras: песня 1, что уже шла, Extras не перебивает")
+    check(d.isManual, "Extras: это ручной режим (Resume Sync активна)")
+    logic.advance(25)
+    check(d.output(at: logic.now).isSong(2, locked: true), "Extras: новая песня 2 перебивает Extras")
+    check(!d.isManual, "Extras: после песни из Logic ручного режима нет")
+
+    d.startExtras(at: logic.now)
+    d.toggleLogoForTest()
+    check(d.output(at: logic.now) == .logo, "Extras: Logo снимает Extras")
+    d.startExtras(at: logic.now)
+    check(!d.manualLogo && d.output(at: logic.now) == .extras, "Extras: запуск снимает Logo")
+    d.extrasFinished()
+    check(d.output(at: logic.now) == .logo && d.manualLogo, "Extras: плейлист доиграл — логотип держится")
+    d.resumeSync()
+    check(d.output(at: logic.now).isSong(2, locked: true), "Extras: Resume Sync — снова песня 2")
+
+    logic.stop()
+    d.startExtras(at: logic.now)
+    logic.note(36)
+    check(!d.extrasActive, "Extras: нота-метка без таймкода снимает Extras")
+
+    // Старт песни в Logic: нота приходит раньше таймкода — Extras до первого кадра песни, без логотипа
+    d.cues[3]!.start = 3700
+    d.startExtras(at: logic.now)
+    logic.position = 3700
+    logic.play()
+    logic.note(38)
+    var flash = false
+    logic.advance(0.5) {
+        let o = d.output(at: logic.now)
+        if o != .extras && !o.isSong(3) { flash = true }
+    }
+    check(!flash, "Extras: между Extras и песней из Logic нет вспышки логотипа")
+    check(d.output(at: logic.now).isSong(3, locked: true), "Extras: песня 3 по таймкоду")
+}
+
+// Картинка в сет-листе: висит, пока не придёт другой сигнал
+do {
+    let d = makeDirector()
+    let logic = FakeLogic(d)
+    d.cues[2] = CueInfo(id: 2, duration: .infinity, start: 3600)
+    d.cues[3]!.start = 3700
+    logic.play()
+    logic.advance(60)
+    check(d.output(at: logic.now).isSong(2, locked: true), "Картинка: через минуту всё ещё картинка")
+    logic.advance(41)
+    check(d.output(at: logic.now).isSong(3, locked: true), "Картинка: следующая песня по таймкоду её сменила")
+    logic.stop()
+    check(d.output(at: logic.now) == .logo, "Картинка: стоп в Logic — логотип")
+    d.playManually(2, at: logic.now)
+    logic.advance(300, send: false)
+    check(d.output(at: logic.now).isSong(2, locked: false), "Картинка: ручной запуск — висит бесконечно")
+}
+
+extension Director {
+    func toggleLogoForTest() {
+        stopManual()
+        manualLogo.toggle()
+    }
+}
+
 extension ShowOutput {
     func isSong(_ id: Int, locked: Bool? = nil) -> Bool {
         if case .song(let i, _, let l) = self { return i == id && (locked == nil || locked == l) }

@@ -12,6 +12,8 @@ struct NowPlaying: Equatable {
         case free
         /// Ручной запуск
         case manual
+        /// Плейлист Extras или одиночный файл Extras
+        case extras
     }
     var mode: Mode = .logo
     var itemID: UUID?
@@ -20,6 +22,9 @@ struct NowPlaying: Equatable {
     var position = 0.0
     var duration = 0.0
     var drift: Int?
+    /// Extras: «Band Logos · Repeat All»
+    var extrasSource: String?
+    var isImage = false
     /// «08 Song · marker G#1»
     var next: String?
 }
@@ -108,6 +113,10 @@ final class Show: ObservableObject {
         engine.urlForCue = { [weak self] id in self?.activeItem(id)?.url }
         engine.startForCue = { [weak self] id in self?.activeItem(id)?.trimStart ?? 0 }
         director.onCueLearned = { [weak self] id, position in self?.learned(id, at: position) }
+        engine.extras.onFinished = { [weak self] in
+            self?.director.extrasFinished()
+            self?.syncManualState()
+        }
         director.onTimecodeGap = { gap in Log.info("Таймкод: пауза \(Int(gap * 1000)) мс") }
         midi.onEvents = { [weak self] events in
             guard let self else { return }
@@ -162,6 +171,117 @@ final class Show: ObservableObject {
         director.resumeSync()
         Log.info("Resume Sync: снова по Logic")
         syncManualState()
+    }
+
+    // MARK: - Extras
+
+    /// Что сейчас играет в Extras (для подсветки строки и Now Playing)
+    @Published private(set) var extrasNow: (playlist: UUID, item: UUID)?
+    private var extrasItems: [PlaylistItem] = []
+    private var extrasPlaylist: UUID?
+
+    /// ▶ Play в шапке плейлиста — по порядку, с повтором плейлиста
+    func playPlaylist(_ id: UUID, from itemID: UUID? = nil) {
+        guard let playlist = playlist(id) else { return }
+        let items = playlist.items.filter { media[$0.path]?.playable ?? false }
+        guard !items.isEmpty else { return }
+        let start = itemID.flatMap { i in items.firstIndex { $0.id == i } } ?? 0
+        startExtras(items, playlist: id, from: start, mode: .playlist(playlist.repeatMode))
+        Log.info("Extras: плейлист «\(playlist.name)» с \(start + 1)-го, повтор \(playlist.repeatMode.title)")
+    }
+
+    /// ▶ у строки — один файл: видео до конца, потом логотип; картинка — бесконечно
+    func playExtra(_ item: PlaylistItem, in playlistID: UUID) {
+        guard media[item.path]?.playable ?? false else { return }
+        startExtras([item], playlist: playlistID, from: 0, mode: .single)
+    }
+
+    private func startExtras(_ items: [PlaylistItem], playlist: UUID, from index: Int, mode: ExtrasPlayer.Mode) {
+        let entries = items.map { ExtrasPlayer.Entry(url: $0.url, isImage: media[$0.path]?.isImage ?? false) }
+        extrasItems = items
+        extrasPlaylist = playlist
+        let now = HostTime.now
+        engine.extras.play(entries, from: index, mode: mode, now: now)
+        director.startExtras(at: now)
+        syncManualState()
+    }
+
+    func playlist(_ id: UUID?) -> Playlist? {
+        settings.playlists.first { $0.id == id }
+    }
+
+    private func editPlaylist(_ id: UUID, _ body: (inout Playlist) -> Void) {
+        guard let i = settings.playlists.firstIndex(where: { $0.id == id }) else { return }
+        body(&settings.playlists[i])
+    }
+
+    @discardableResult
+    func newPlaylist() -> UUID {
+        var title = "Untitled Playlist"
+        var n = 2
+        while settings.playlists.contains(where: { $0.name == title }) {
+            title = "Untitled Playlist \(n)"
+            n += 1
+        }
+        let playlist = Playlist(name: title)
+        settings.playlists.append(playlist)
+        Log.info("Новый плейлист Extras: \(title)")
+        return playlist.id
+    }
+
+    func renamePlaylist(_ id: UUID, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        editPlaylist(id) { $0.name = trimmed }
+    }
+
+    func deletePlaylist(_ id: UUID) {
+        if extrasPlaylist == id { director.stopManual(); engine.extras.stop() }
+        settings.playlists.removeAll { $0.id == id }
+    }
+
+    func setRepeat(_ mode: RepeatMode, for id: UUID) {
+        editPlaylist(id) { $0.repeatMode = mode }
+    }
+
+    func addFiles(_ urls: [URL], toPlaylist id: UUID, at index: Int? = nil) {
+        let files = urls.flatMap(expandFolder).filter(Library.isMedia)
+        guard !files.isEmpty else { return }
+        editPlaylist(id) { p in
+            let at = min(max(0, index ?? p.items.count), p.items.count)
+            p.items.insert(contentsOf: files.map { PlaylistItem(path: $0.path) }, at: at)
+        }
+        inspectMedia()
+    }
+
+    func removePlaylistItems(_ ids: Set<UUID>, from id: UUID) {
+        editPlaylist(id) { $0.items.removeAll { ids.contains($0.id) } }
+    }
+
+    func movePlaylistItems(in id: UUID, from offsets: IndexSet, to destination: Int) {
+        editPlaylist(id) { $0.items.move(fromOffsets: offsets, toOffset: destination) }
+    }
+
+    func renamePlaylistItem(_ itemID: UUID, in id: UUID, to title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespaces)
+        editPlaylist(id) { p in
+            guard let i = p.items.firstIndex(where: { $0.id == itemID }) else { return }
+            p.items[i].title = trimmed.isEmpty ? nil : trimmed
+        }
+    }
+
+    func replacePlaylistFile(_ itemID: UUID, in id: UUID) {
+        guard let item = playlist(id)?.items.first(where: { $0.id == itemID }) else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.movie, .image]
+        panel.prompt = "Choose"
+        panel.directoryURL = item.url.deletingLastPathComponent()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        editPlaylist(id) { p in
+            guard let i = p.items.firstIndex(where: { $0.id == itemID }) else { return }
+            p.items[i].path = url.path
+        }
+        inspectMedia()
     }
 
     /// Аварийный ручной запуск песни активного сета: до конца, потом логотип
@@ -414,6 +534,7 @@ final class Show: ObservableObject {
     /// Проверить файлы, о которых ещё ничего не известно (и пропавшие — вдруг появились)
     private func inspectMedia() {
         var paths = Set(settings.setlists.flatMap { $0.items.map(\.path) })
+        paths.formUnion(settings.playlists.flatMap { $0.items.map(\.path) })
         if let logo = settings.logoPath { paths.insert(logo) }
         let todo = paths.filter { media[$0] == nil || media[$0]?.missing == true }
         guard !todo.isEmpty else { return }
@@ -434,7 +555,9 @@ final class Show: ObservableObject {
         let items = settings.active?.items ?? []
         var cues: [Int: CueInfo] = [:]
         for (i, item) in items.enumerated() {
-            guard let d = duration(item) else { continue }
+            // Картинка вместо видео песни висит, пока не придёт другой сигнал
+            let d = media[item.path].map { $0.playable && $0.isImage } == true ? .infinity : duration(item)
+            guard let d else { continue }
             cues[i + 1] = CueInfo(id: i + 1, duration: d, start: item.marker)
         }
         if cues != director.cues { director.cues = cues }
@@ -456,6 +579,9 @@ final class Show: ObservableObject {
         engine.scale = settings.scale
         director.fadeOut = d
         director.markerBaseNote = settings.markerBaseNote
+        engine.extras.imageDuration = max(1, settings.extrasImageDuration)
+        engine.extras.volume = Float(settings.extrasVolume)
+        if engine.extras.audioDevice != settings.extrasAudioDevice { engine.extras.audioDevice = settings.extrasAudioDevice }
     }
 
     private func settingsChanged(from old: Settings) {
@@ -477,6 +603,12 @@ final class Show: ObservableObject {
         let now = HostTime.now
         let out = director.output(at: now)
         engine.update(out, next: director.nextCue(after: out), now: now)
+        engine.extras.tick(now: now)
+        // Extras ушли с экрана (песня из Logic, Logo, Resume Sync) — остановить вместе со звуком
+        if out != .extras, engine.extras.isPlaying, !engine.extrasVisible {
+            engine.extras.stop()
+            extrasPlaylist = nil
+        }
         preview.sync()
 
         ticks += 1
@@ -523,6 +655,22 @@ final class Show: ObservableObject {
             n.mode = .black
         case .logo:
             n.mode = .logo
+        case .extras:
+            let x = engine.extras
+            n.mode = .extras
+            n.number = x.index + 1
+            if extrasItems.indices.contains(x.index) {
+                n.itemID = extrasItems[x.index].id
+                n.title = extrasItems[x.index].displayName
+            }
+            n.isImage = x.currentSlot.isImage
+            n.position = x.position
+            n.duration = x.duration
+            let name = playlist(extrasPlaylist)?.name ?? "Extras"
+            switch x.mode {
+            case .single: n.extrasSource = name + " · single file"
+            case .playlist(let r): n.extrasSource = name + (r == .off ? "" : " · Repeat \(r.title)")
+            }
         case .song(let id, let position, let locked):
             n.mode = director.manualPlay != nil ? .manual : locked ? .locked : .free
             n.number = id
@@ -534,11 +682,13 @@ final class Show: ObservableObject {
             }
             n.drift = engine.activeSlot?.drift.map { Int(($0 * 1000).rounded()) }
         }
-        if let next = director.nextCue(after: out), let item = activeItem(next) {
+        if out != .extras, let next = director.nextCue(after: out), let item = activeItem(next) {
             n.next = String(format: "%02d", next) + " " + item.displayName
                 + " · marker " + Self.noteName(settings.markerBaseNote + next - 1)
         }
         if n != nowPlaying { nowPlaying = n }
+        let playing = out == .extras ? extrasPlaylist.flatMap { p in n.itemID.map { (p, $0) } } : nil
+        if playing?.0 != extrasNow?.playlist || playing?.1 != extrasNow?.item { extrasNow = playing }
     }
 
     private func updateLogic(now: Double) {

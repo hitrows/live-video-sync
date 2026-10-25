@@ -14,6 +14,8 @@ enum ShowOutput: Equatable {
     case logo
     /// locked — видео держится за таймкод Logic; иначе доигрывает само (связь пропала или MTC нет)
     case song(id: Int, position: Double, locked: Bool)
+    /// Плейлист Extras (что именно играет — решает плеер Extras)
+    case extras
 }
 
 /// Логика шоу: из MIDI (MTC, MMC, ноты-метки) решает, что показывать.
@@ -30,6 +32,10 @@ final class Director {
     /// Ручной запуск видео кнопкой (аварийный режим): важнее таймкода, до конца видео,
     /// потом логотип. Сбрасывается кнопкой Logo, нотой-меткой или новым стартом воспроизведения.
     private(set) var manualPlay: (id: Int, host: Double)?
+    /// Играет плейлист Extras. Перебивает его только новая песня из Logic (и ручные кнопки).
+    private(set) var extrasActive = false
+    /// Песня, которая уже шла, когда запустили Extras, — она Extras не перебивает
+    private var extrasOverSong: Int?
     /// Выучено начало песни: (id, позиция MTC)
     var onCueLearned: ((Int, Double) -> Void)?
     /// Пауза в таймкоде заметной длины (с) — для лога качества сети
@@ -59,24 +65,44 @@ final class Director {
     func id(forNote note: Int) -> Int { note - markerBaseNote + 1 }
     func note(forId id: Int) -> Int { markerBaseNote + id - 1 }
 
+    /// Ручной запуск — явное действие: снимает Logo, Blackout и Extras
     func playManually(_ id: Int, at now: Double) {
         guard cues[id] != nil else { return }
         manualPlay = (id, now)
         manualLogo = false
+        manualBlack = false
+        extrasActive = false
     }
 
     func stopManual() {
         manualPlay = nil
+        extrasActive = false
+    }
+
+    func startExtras(at now: Double) {
+        manualPlay = nil
+        manualLogo = false
+        manualBlack = false
+        extrasActive = true
+        extrasOverSong = clock.position(at: now).flatMap { cue(at: $0)?.id }
+    }
+
+    /// Плейлист доиграл (Repeat Off) — логотип и держится, как после ручного видео
+    func extrasFinished() {
+        guard extrasActive else { return }
+        extrasActive = false
+        manualLogo = true
     }
 
     /// Есть ручной режим, который снимает Resume Sync
-    var isManual: Bool { manualBlack || manualLogo || manualPlay != nil }
+    var isManual: Bool { manualBlack || manualLogo || manualPlay != nil || extrasActive }
 
-    /// Resume Sync: снять Logo, Blackout и ручной запуск — сразу то, что играет в Logic
+    /// Resume Sync: снять Logo, Blackout, ручной запуск и Extras — сразу то, что играет в Logic
     func resumeSync() {
         manualBlack = false
         manualLogo = false
         manualPlay = nil
+        extrasActive = false
     }
 
     func handle(_ event: MIDIEvent, host: Double) {
@@ -107,6 +133,9 @@ final class Director {
             guard cues[id] != nil else { return }
             manualLogo = false
             manualPlay = nil
+            // Таймкод идёт — Extras держатся до первого кадра песни (без вспышки логотипа);
+            // таймкода нет — песня по ноте, Extras снимаем сразу
+            if !clock.isReceiving(at: host) { extrasActive = false }
             if clock.isReceiving(at: host) {
                 if let pos = clock.position(at: host) {
                     learnIfMarker(id, at: pos, host: host)
@@ -183,6 +212,16 @@ final class Director {
             // Ручное видео кончилось — логотип и остаётся
             manualPlay = nil
             manualLogo = true
+        }
+        if extrasActive {
+            // Новая песня из Logic перебивает Extras; та, что уже шла при запуске Extras, — нет
+            let hit = clock.position(at: now).flatMap { cue(at: $0) }
+            if let hit, hit.id != extrasOverSong {
+                extrasActive = false
+            } else {
+                if hit == nil { extrasOverSong = nil }
+                return .extras
+            }
         }
         if manualLogo { return .logo }
 

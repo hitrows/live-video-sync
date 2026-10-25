@@ -97,6 +97,44 @@ struct Setlist: Codable, Equatable, Identifiable, Hashable {
     }
 }
 
+/// Файл плейлиста Extras
+struct PlaylistItem: Codable, Equatable, Identifiable, Hashable {
+    var id = UUID()
+    var path: String
+    var title: String?
+
+    init(path: String) { self.path = path }
+
+    var url: URL { URL(fileURLWithPath: path) }
+    var displayName: String {
+        if let title, !title.isEmpty { return title }
+        return url.lastPathComponent
+    }
+}
+
+/// Повтор как в Apple Music
+enum RepeatMode: String, Codable, CaseIterable {
+    case off, all, one
+
+    var title: String {
+        switch self {
+        case .off: return "Off"
+        case .all: return "All"
+        case .one: return "One"
+        }
+    }
+}
+
+/// Плейлист Extras — общий для всех сетов
+struct Playlist: Codable, Equatable, Identifiable, Hashable {
+    var id = UUID()
+    var name: String
+    var items: [PlaylistItem] = []
+    var repeatMode: RepeatMode = .off
+
+    init(name: String) { self.name = name }
+}
+
 /// Переход между песнями и логотипом
 enum Transition: String, Codable, CaseIterable {
     /// Через чёрное
@@ -137,8 +175,12 @@ struct Settings: Codable, Equatable {
     var hidePointer = true
     var restartScreen: RestartScreen = .image
     var restartImagePath: String?
+    var playlists: [Playlist] = []
     /// Одна длительность на все картинки Extras, с
     var extrasImageDuration: Double = 10
+    /// Выход звука Extras (UID устройства CoreAudio); nil — системный
+    var extrasAudioDevice: String?
+    var extrasVolume: Double = 1
 
     // Старый формат: одна папка с видео «NN_название» и метки по номерам. Переносится в сет при запуске.
     var legacyFolderPath: String?
@@ -149,6 +191,7 @@ struct Settings: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case setlists, activeSetlist, logoPath, display, transition, transitionDuration, scale, markerBaseNote
         case live, logicMac, hideDock, hidePointer, restartScreen, restartImagePath, extrasImageDuration
+        case playlists, extrasAudioDevice, extrasVolume
         case legacyFolderPath = "folderPath", legacyMarkers = "markers"
         case crossfade, fadeOut
     }
@@ -170,6 +213,9 @@ struct Settings: Codable, Equatable {
         restartScreen = (try? c.decodeIfPresent(RestartScreen.self, forKey: .restartScreen)) ?? d.restartScreen
         restartImagePath = try? c.decodeIfPresent(String.self, forKey: .restartImagePath)
         extrasImageDuration = (try? c.decodeIfPresent(Double.self, forKey: .extrasImageDuration)) ?? d.extrasImageDuration
+        playlists = (try? c.decodeIfPresent([Playlist].self, forKey: .playlists)) ?? []
+        extrasAudioDevice = try? c.decodeIfPresent(String.self, forKey: .extrasAudioDevice)
+        extrasVolume = (try? c.decodeIfPresent(Double.self, forKey: .extrasVolume)) ?? d.extrasVolume
         legacyFolderPath = try? c.decodeIfPresent(String.self, forKey: .legacyFolderPath)
         legacyMarkers = (try? c.decodeIfPresent([String: [String: Double]].self, forKey: .legacyMarkers)) ?? [:]
         // Старые «crossfade» и «fadeOut» → переход и длительность
@@ -199,6 +245,9 @@ struct Settings: Codable, Equatable {
         try c.encode(restartScreen, forKey: .restartScreen)
         try c.encodeIfPresent(restartImagePath, forKey: .restartImagePath)
         try c.encode(extrasImageDuration, forKey: .extrasImageDuration)
+        try c.encode(playlists, forKey: .playlists)
+        try c.encodeIfPresent(extrasAudioDevice, forKey: .extrasAudioDevice)
+        try c.encode(extrasVolume, forKey: .extrasVolume)
         try c.encodeIfPresent(legacyFolderPath, forKey: .legacyFolderPath)
         if !legacyMarkers.isEmpty { try c.encode(legacyMarkers, forKey: .legacyMarkers) }
     }

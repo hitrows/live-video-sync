@@ -16,6 +16,9 @@ final class SongSlot {
     private(set) var drift: Double?
     private(set) var resyncCount = 0
     private var lastHardResync = -100.0
+    /// Картинка вместо видео (слой поверх кадра видео)
+    let imageLayer = CALayer()
+    private(set) var image: CGImage?
 
     init() {
         player.isMuted = true
@@ -24,6 +27,25 @@ final class SongSlot {
         player.preventsDisplaySleepDuringVideoPlayback = false
         layer = AVPlayerLayer(player: player)
         layer.opacity = 0
+        imageLayer.contentsGravity = .resize
+        imageLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        imageLayer.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
+        layer.addSublayer(imageLayer)
+    }
+
+    var isImage: Bool { image != nil }
+
+    /// Рамка на экране; картинка — во весь слой
+    func setFrame(_ frame: CGRect) {
+        if layer.frame != frame { layer.frame = frame }
+        let inner = CGRect(origin: .zero, size: frame.size)
+        if imageLayer.frame != inner { imageLayer.frame = inner }
+    }
+
+    /// Размер картинки или кадра видео (для рамки на экране)
+    var contentSize: CGSize? {
+        if let image { return CGSize(width: image.width, height: image.height) }
+        return player.currentItem?.presentationSize
     }
 
     func load(id: Int, url: URL, start: Double = 0) {
@@ -33,9 +55,24 @@ final class SongSlot {
         started = false
         prerolled = false
         drift = nil
+        if Library.imageExtensions.contains(url.pathExtension.lowercased()) {
+            player.replaceCurrentItem(with: nil)
+            image = Self.loadImage(url)
+            imageLayer.contents = image
+            if image == nil { Log.info("Слот: картинка не открывается — \(url.lastPathComponent)") }
+            Log.info("Слот: загружена картинка \(id) (\(url.lastPathComponent))")
+            return
+        }
+        image = nil
+        imageLayer.contents = nil
         player.replaceCurrentItem(with: AVPlayerItem(url: url))
         if start > 0 { player.seek(to: CMTime(seconds: start, preferredTimescale: 90_000), toleranceBefore: .zero, toleranceAfter: .zero) }
         Log.info("Слот: загружена песня \(id) (\(url.lastPathComponent))")
+    }
+
+    static func loadImage(_ url: URL) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
     }
 
     private var itemReady: Bool { player.currentItem?.status == .readyToPlay }
@@ -46,19 +83,43 @@ final class SongSlot {
     }
 
     /// Есть кадр на экране
-    var isReady: Bool { itemReady && layer.isReadyForDisplay }
+    var isReady: Bool { isImage || (itemReady && layer.isReadyForDisplay) }
 
-    var failed: Bool { player.currentItem?.status == .failed }
+    var failed: Bool {
+        if url != nil, player.currentItem == nil, image == nil { return true }
+        return player.currentItem?.status == .failed
+    }
+
+    /// Длительность видео (без обрезки), с
+    var videoDuration: Double { duration }
+
+    /// Видео дошло до конца
+    var reachedEnd: Bool {
+        guard !isImage, itemReady, started else { return false }
+        return player.currentTime().seconds >= duration - 0.05
+    }
+
+    /// Просто играть с начала (Extras), без таймкода
+    func playFromStart() {
+        started = true
+        guard !isImage else { return }
+        player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+        player.play()
+    }
 
     /// Подготовка в фоне: декодер прогрет на первом кадре
     func idle() {
-        guard itemReady, !started, !prerolled else { return }
+        guard !isImage, itemReady, !started, !prerolled else { return }
         prerolled = true
         player.preroll(atRate: 1) { _ in }
     }
 
     /// Держаться за позицию p (секунды от начала видео) в момент now
     func follow(position p: Double, now: Double) {
+        if isImage {
+            started = true
+            return
+        }
         guard itemReady else { return }
         let end = duration
         if !started || (player.rate == 0 && p < end - 0.1) {
@@ -97,6 +158,8 @@ final class SongSlot {
         player.replaceCurrentItem(with: nil)
         cueId = nil
         url = nil
+        image = nil
+        imageLayer.contents = nil
         started = false
         prerolled = false
         drift = nil
@@ -105,6 +168,10 @@ final class SongSlot {
     /// Ушла с экрана: остановить и вернуть на первый кадр — снова готова к старту
     func deactivate() {
         player.pause()
+        guard !isImage else {
+            started = false
+            return
+        }
         started = false
         prerolled = false
         drift = nil
@@ -146,12 +213,13 @@ final class LogoPlayer {
 /// Новый клип выходит на экран только когда у него есть кадр — до этого виден прежний, без чёрных вспышек.
 final class VideoEngine {
     enum Element: Equatable {
-        case black, logo, slot(Int)
+        case black, logo, slot(Int), extras
     }
 
     let rootLayer = CALayer()
     let logo = LogoPlayer()
     let slots = [SongSlot(), SongSlot()]
+    let extras = ExtrasPlayer()
     var fadeOut = 0.7
     var fadeIn = 0.7
     var crossfade = false
@@ -172,6 +240,8 @@ final class VideoEngine {
             layer.actions = ["opacity": NSNull(), "bounds": NSNull(), "position": NSNull()]
             rootLayer.addSublayer(layer)
         }
+        extras.container.actions = ["opacity": NSNull(), "bounds": NSNull(), "position": NSNull()]
+        rootLayer.addSublayer(extras.container)
         rootLayer.masksToBounds = true
         for layer in [logo.layer] + slots.map(\.layer) {
             layer.autoresizingMask = []
@@ -211,16 +281,21 @@ final class VideoEngine {
     /// Пересчитать рамки (смена режима, экрана или нового файла с другими пропорциями)
     private func layoutVideo() {
         let bounds = rootLayer.bounds
-        let items: [(AVPlayerLayer, CGSize?)] = [(logo.layer, logo.player.currentItem?.presentationSize)]
-            + slots.map { ($0.layer, $0.player.currentItem?.presentationSize) }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for (layer, size) in items {
-            // Пока размер неизвестен — по пропорциям экрана, кадра всё равно ещё нет
-            let frame = Self.videoFrame(videoSize: size ?? .zero, in: bounds, mode: scale)
-            if layer.frame != frame { layer.frame = frame }
+        // Пока размер неизвестен — по пропорциям экрана, кадра всё равно ещё нет
+        let logoFrame = Self.videoFrame(videoSize: logo.player.currentItem?.presentationSize ?? .zero, in: bounds, mode: scale)
+        if logo.layer.frame != logoFrame { logo.layer.frame = logoFrame }
+        for slot in slots {
+            slot.setFrame(Self.videoFrame(videoSize: slot.contentSize ?? .zero, in: bounds, mode: scale))
         }
         CATransaction.commit()
+    }
+
+
+    /// Видно ли сейчас Extras (или они ещё уходят с экрана)
+    var extrasVisible: Bool {
+        visible == .extras || (extras.container.presentation()?.opacity ?? extras.container.opacity) > 0.001
     }
 
     /// Активная песня (для монитора)
@@ -235,6 +310,8 @@ final class VideoEngine {
             show(.black, now: now)
         case .logo:
             show(.logo, now: now)
+        case .extras:
+            show(.extras, now: now)
         case .song(let id, let position, _):
             if let i = slotIndex(holding: id) ?? acquireSlot(for: id) {
                 // Битый файл — лучше логотип, чем чёрный экран
@@ -250,6 +327,7 @@ final class VideoEngine {
         }
 
         layoutVideo()
+        extras.layout(bounds: rootLayer.bounds, scale: scale)
 
         // Ушедшие с экрана слоты — остановить после fade-out, остальные — подготовить
         for (i, slot) in slots.enumerated() where visible != .slot(i) {
@@ -322,6 +400,7 @@ final class VideoEngine {
         case .black: return nil
         case .logo: return logo.layer
         case .slot(let i): return slots[i].layer
+        case .extras: return extras.container
         }
     }
 
@@ -330,6 +409,7 @@ final class VideoEngine {
         case .black: return true
         case .logo: return logo.isReady
         case .slot(let i): return slots[i].isReady && slots[i].started
+        case .extras: return extras.isReady
         }
     }
 
@@ -376,30 +456,54 @@ final class VideoEngine {
         case .black: return "чёрный"
         case .logo: return "логотип"
         case .slot(let i): return "песня \(slots[i].cueId ?? 0)"
+        case .extras: return "Extras"
         }
     }
 }
 
 
 /// Превью в окне управления: те же плееры, что и на экране сцены, — второй набор слоёв.
-/// Каждый кадр копирует прозрачность и рамки с экрана сцены, масштабируя под свой размер.
+/// Каждый кадр копирует прозрачность, рамки и картинки с экрана сцены, масштабируя под свой размер.
 final class PreviewMirror {
+    private struct Pair {
+        let source: AVPlayerLayer
+        let mirror: AVPlayerLayer
+        let image: CALayer?
+        let sourceImage: CALayer?
+        /// Прозрачность родителя (контейнер Extras)
+        let parent: CALayer?
+    }
+
     let rootLayer = CALayer()
     private let engine: VideoEngine
-    private let layers: [(source: AVPlayerLayer, mirror: AVPlayerLayer)]
+    private let pairs: [Pair]
 
     init(engine: VideoEngine) {
         self.engine = engine
         rootLayer.backgroundColor = CGColor(gray: 0, alpha: 1)
         rootLayer.masksToBounds = true
-        layers = ([engine.logo.layer] + engine.slots.map(\.layer)).map { source in
+        let noActions: [String: CAAction] = ["opacity": NSNull(), "bounds": NSNull(), "position": NSNull(), "contents": NSNull()]
+        func pair(_ source: AVPlayerLayer, slot: SongSlot?, parent: CALayer?) -> Pair {
+            // У AVPlayerLayer свои внутренние слои — картинку берём прямо из слота
             let mirror = AVPlayerLayer(player: source.player)
             mirror.videoGravity = .resize
             mirror.opacity = 0
-            mirror.actions = ["opacity": NSNull(), "bounds": NSNull(), "position": NSNull(), "transform": NSNull()]
-            return (source, mirror)
+            mirror.actions = noActions
+            var image: CALayer?
+            if slot != nil {
+                let l = CALayer()
+                l.contentsGravity = .resize
+                l.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+                l.actions = noActions
+                mirror.addSublayer(l)
+                image = l
+            }
+            return Pair(source: source, mirror: mirror, image: image, sourceImage: slot?.imageLayer, parent: parent)
         }
-        for pair in layers { rootLayer.addSublayer(pair.mirror) }
+        pairs = [pair(engine.logo.layer, slot: nil, parent: nil)]
+            + engine.slots.map { pair($0.layer, slot: $0, parent: nil) }
+            + engine.extras.slots.map { pair($0.layer, slot: $0, parent: engine.extras.container) }
+        for p in pairs { rootLayer.addSublayer(p.mirror) }
         rootLayer.actions = ["bounds": NSNull(), "position": NSNull()]
     }
 
@@ -416,12 +520,18 @@ final class PreviewMirror {
         let k = dst.width / src.width
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for (source, mirror) in layers {
-            let f = source.frame
+        for p in pairs {
+            let f = p.source.frame
             let frame = CGRect(x: f.minX * k, y: f.minY * k, width: f.width * k, height: f.height * k)
-            if mirror.frame != frame { mirror.frame = frame }
-            let opacity = source.presentation()?.opacity ?? source.opacity
-            if mirror.opacity != opacity { mirror.opacity = opacity }
+            if p.mirror.frame != frame { p.mirror.frame = frame }
+            var opacity = p.source.presentation()?.opacity ?? p.source.opacity
+            if let parent = p.parent { opacity *= parent.presentation()?.opacity ?? parent.opacity }
+            if p.mirror.opacity != opacity { p.mirror.opacity = opacity }
+            if let image = p.image {
+                let contents = p.sourceImage?.contents
+                if (image.contents as AnyObject?) !== (contents as AnyObject?) { image.contents = contents }
+                if image.frame != p.mirror.bounds { image.frame = p.mirror.bounds }
+            }
         }
         CATransaction.commit()
     }
