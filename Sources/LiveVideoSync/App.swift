@@ -174,9 +174,8 @@ private struct ShowMenu: View {
             .keyboardShortcut("r")
             .disabled(!show.isManual)
         Divider()
-        Button("Test Pattern") {}
+        Toggle("Test Pattern", isOn: $show.testPattern)
             .keyboardShortcut("t")
-            .disabled(true)
         Divider()
         Picker("Mode", selection: $ui.mode) {
             Text("Show").tag(UIState.Mode.show).keyboardShortcut("1")

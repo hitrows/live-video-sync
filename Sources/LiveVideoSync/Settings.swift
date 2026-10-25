@@ -181,6 +181,10 @@ struct Settings: Codable, Equatable {
     /// Выход звука Extras (UID устройства CoreAudio); nil — системный
     var extrasAudioDevice: String?
     var extrasVolume: Double = 1
+    /// Подгонка под экран площадки и пресеты площадок
+    var screenFit = ScreenFit()
+    var venuePresets: [VenuePreset] = []
+    var venuePreset: UUID?
 
     // Старый формат: одна папка с видео «NN_название» и метки по номерам. Переносится в сет при запуске.
     var legacyFolderPath: String?
@@ -191,7 +195,7 @@ struct Settings: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case setlists, activeSetlist, logoPath, display, transition, transitionDuration, scale, markerBaseNote
         case live, logicMac, hideDock, hidePointer, restartScreen, restartImagePath, extrasImageDuration
-        case playlists, extrasAudioDevice, extrasVolume
+        case playlists, extrasAudioDevice, extrasVolume, screenFit, venuePresets, venuePreset
         case legacyFolderPath = "folderPath", legacyMarkers = "markers"
         case crossfade, fadeOut
     }
@@ -216,6 +220,9 @@ struct Settings: Codable, Equatable {
         playlists = (try? c.decodeIfPresent([Playlist].self, forKey: .playlists)) ?? []
         extrasAudioDevice = try? c.decodeIfPresent(String.self, forKey: .extrasAudioDevice)
         extrasVolume = (try? c.decodeIfPresent(Double.self, forKey: .extrasVolume)) ?? d.extrasVolume
+        screenFit = (try? c.decodeIfPresent(ScreenFit.self, forKey: .screenFit)) ?? ScreenFit()
+        venuePresets = (try? c.decodeIfPresent([VenuePreset].self, forKey: .venuePresets)) ?? []
+        venuePreset = try? c.decodeIfPresent(UUID.self, forKey: .venuePreset)
         legacyFolderPath = try? c.decodeIfPresent(String.self, forKey: .legacyFolderPath)
         legacyMarkers = (try? c.decodeIfPresent([String: [String: Double]].self, forKey: .legacyMarkers)) ?? [:]
         // Старые «crossfade» и «fadeOut» → переход и длительность
@@ -248,6 +255,9 @@ struct Settings: Codable, Equatable {
         try c.encode(playlists, forKey: .playlists)
         try c.encodeIfPresent(extrasAudioDevice, forKey: .extrasAudioDevice)
         try c.encode(extrasVolume, forKey: .extrasVolume)
+        try c.encode(screenFit, forKey: .screenFit)
+        try c.encode(venuePresets, forKey: .venuePresets)
+        try c.encodeIfPresent(venuePreset, forKey: .venuePreset)
         try c.encodeIfPresent(legacyFolderPath, forKey: .legacyFolderPath)
         if !legacyMarkers.isEmpty { try c.encode(legacyMarkers, forKey: .legacyMarkers) }
     }

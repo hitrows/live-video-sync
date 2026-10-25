@@ -87,6 +87,10 @@ final class Show: ObservableObject {
     /// Найденные в сети Mac + запомненный Logic Mac (для выбора в Settings)
     @Published private(set) var linkChoices: [LinkTarget] = []
     @Published private(set) var hasMIDISession = true
+    /// Тестовая сетка на экране сцены (не сохраняется: после перезапуска — шоу, а не сетка)
+    @Published var testPattern = false {
+        didSet { engine.testPattern = testPattern }
+    }
     @Published private(set) var midiSessionName = ""
 
     let director = Director()
@@ -171,6 +175,39 @@ final class Show: ObservableObject {
         director.resumeSync()
         Log.info("Resume Sync: снова по Logic")
         syncManualState()
+    }
+
+    // MARK: - Screen Fit
+
+    var venuePresetName: String? {
+        settings.venuePresets.first { $0.id == settings.venuePreset }?.name
+    }
+
+    func choosePreset(_ id: UUID) {
+        guard let preset = settings.venuePresets.first(where: { $0.id == id }) else { return }
+        settings.venuePreset = id
+        settings.screenFit = preset.fit
+        Log.info("Screen Fit: пресет «\(preset.name)»")
+    }
+
+    func savePreset(named name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        let preset = VenuePreset(name: trimmed, fit: settings.screenFit)
+        settings.venuePresets.append(preset)
+        settings.venuePreset = preset.id
+        Log.info("Screen Fit: сохранён пресет «\(trimmed)»")
+    }
+
+    func renamePreset(_ id: UUID, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, let i = settings.venuePresets.firstIndex(where: { $0.id == id }) else { return }
+        settings.venuePresets[i].name = trimmed
+    }
+
+    func deletePreset(_ id: UUID) {
+        settings.venuePresets.removeAll { $0.id == id }
+        if settings.venuePreset == id { settings.venuePreset = nil }
     }
 
     // MARK: - Extras
@@ -577,6 +614,7 @@ final class Show: ObservableObject {
         engine.fadeIn = d
         engine.crossfade = settings.transition == .crossfade
         engine.scale = settings.scale
+        engine.fit = settings.screenFit
         director.fadeOut = d
         director.markerBaseNote = settings.markerBaseNote
         engine.extras.imageDuration = max(1, settings.extrasImageDuration)
@@ -585,6 +623,11 @@ final class Show: ObservableObject {
     }
 
     private func settingsChanged(from old: Settings) {
+        // Правки подгонки сразу сохраняются в выбранный пресет площадки
+        if settings.screenFit != old.screenFit, let id = settings.venuePreset,
+           let i = settings.venuePresets.firstIndex(where: { $0.id == id }), settings.venuePresets[i].fit != settings.screenFit {
+            settings.venuePresets[i].fit = settings.screenFit
+        }
         Store.save(settings)
         applyToEngine()
         output.choice = settings.display

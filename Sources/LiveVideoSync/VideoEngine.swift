@@ -217,9 +217,22 @@ final class VideoEngine {
     }
 
     let rootLayer = CALayer()
+    /// Всё, что идёт на экран (логотип, песни, Extras), — к этому слою применяется Screen Fit
+    let contentLayer = CALayer()
+    /// Обрезка (Crop) — маска контента
+    private let cropMask = CALayer()
+    /// Тестовая сетка поверх всего, без Screen Fit — видно, какая часть экрана реально видна
+    let testPatternLayer = CALayer()
     let logo = LogoPlayer()
     let slots = [SongSlot(), SongSlot()]
     let extras = ExtrasPlayer()
+    var fit = ScreenFit() { didSet { if fit != oldValue { applyFit() } } }
+    var testPattern = false {
+        didSet {
+            guard testPattern != oldValue else { return }
+            updateTestPattern()
+        }
+    }
     var fadeOut = 0.7
     var fadeIn = 0.7
     var crossfade = false
@@ -235,14 +248,27 @@ final class VideoEngine {
         rootLayer.backgroundColor = CGColor(gray: 0, alpha: 1)
         // Пока экрана сцены нет — пропорции 16:9 (для превью)
         rootLayer.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let noActions: [String: CAAction] = ["opacity": NSNull(), "bounds": NSNull(), "position": NSNull(),
+                                             "transform": NSNull(), "anchorPoint": NSNull(), "frame": NSNull(), "contents": NSNull(), "hidden": NSNull()]
+        contentLayer.actions = noActions
+        contentLayer.anchorPoint = .zero
+        cropMask.actions = noActions
+        cropMask.backgroundColor = CGColor(gray: 1, alpha: 1)
+        contentLayer.mask = cropMask
+        rootLayer.addSublayer(contentLayer)
         for layer in [logo.layer] + slots.map(\.layer) {
             layer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
             layer.actions = ["opacity": NSNull(), "bounds": NSNull(), "position": NSNull()]
-            rootLayer.addSublayer(layer)
+            contentLayer.addSublayer(layer)
         }
         extras.container.actions = ["opacity": NSNull(), "bounds": NSNull(), "position": NSNull()]
-        rootLayer.addSublayer(extras.container)
+        contentLayer.addSublayer(extras.container)
+        testPatternLayer.actions = noActions
+        testPatternLayer.isHidden = true
+        testPatternLayer.contentsGravity = .resize
+        rootLayer.addSublayer(testPatternLayer)
         rootLayer.masksToBounds = true
+        applyFit()
         for layer in [logo.layer] + slots.map(\.layer) {
             layer.autoresizingMask = []
             layer.videoGravity = .resize
@@ -254,11 +280,49 @@ final class VideoEngine {
     }
 
     func layout(bounds: CGRect) {
+        let changed = rootLayer.bounds.size != bounds.size
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         rootLayer.frame = bounds
+        testPatternLayer.frame = rootLayer.bounds
         CATransaction.commit()
+        if changed {
+            applyFit()
+            if testPattern { updateTestPattern() }
+        }
         layoutVideo()
+    }
+
+    /// Screen Fit → один проективный transform слоя контента + маска обрезки
+    private func applyFit() {
+        let w = Double(rootLayer.bounds.width), h = Double(rootLayer.bounds.height)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        contentLayer.bounds = rootLayer.bounds
+        contentLayer.position = .zero
+        let r = fit.cropRect(width: w, height: h)
+        cropMask.frame = CGRect(x: r.x, y: r.y, width: r.w, height: r.h)
+        contentLayer.transform = fit.isIdentity ? CATransform3DIdentity
+            : (fit.homography(width: w, height: h).map(Self.transform3D) ?? CATransform3DIdentity)
+        CATransaction.commit()
+    }
+
+    /// Гомография 3×3 → CATransform3D (Core Animation умножает строку [x y z 1] на матрицу)
+    static func transform3D(_ hm: [Double]) -> CATransform3D {
+        var t = CATransform3DIdentity
+        t.m11 = hm[0]; t.m12 = hm[3]; t.m14 = hm[6]
+        t.m21 = hm[1]; t.m22 = hm[4]; t.m24 = hm[7]
+        t.m41 = hm[2]; t.m42 = hm[5]; t.m44 = hm[8]
+        return t
+    }
+
+    private func updateTestPattern() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        testPatternLayer.isHidden = !testPattern
+        if testPattern { testPatternLayer.contents = TestPattern.image(size: rootLayer.bounds.size) }
+        CATransaction.commit()
+        Log.info("Test Pattern: \(testPattern ? "вкл" : "выкл")")
     }
 
     /// Рамка видео по режиму масштаба: всегда с пропорциями видео, центр по экрану.
@@ -463,7 +527,7 @@ final class VideoEngine {
 
 
 /// Превью в окне управления: те же плееры, что и на экране сцены, — второй набор слоёв.
-/// Каждый кадр копирует прозрачность, рамки и картинки с экрана сцены, масштабируя под свой размер.
+/// Каждый кадр копирует прозрачность, рамки, картинки и Screen Fit с экрана сцены, масштабируя под свой размер.
 final class PreviewMirror {
     private struct Pair {
         let source: AVPlayerLayer
@@ -475,6 +539,11 @@ final class PreviewMirror {
     }
 
     let rootLayer = CALayer()
+    /// Холст размером с экран сцены, уменьшенный до размера превью
+    private let canvas = CALayer()
+    private let content = CALayer()
+    private let cropMask = CALayer()
+    private let testPattern = CALayer()
     private let engine: VideoEngine
     private let pairs: [Pair]
 
@@ -482,18 +551,27 @@ final class PreviewMirror {
         self.engine = engine
         rootLayer.backgroundColor = CGColor(gray: 0, alpha: 1)
         rootLayer.masksToBounds = true
-        let noActions: [String: CAAction] = ["opacity": NSNull(), "bounds": NSNull(), "position": NSNull(), "contents": NSNull()]
+        let noActions: [String: CAAction] = ["opacity": NSNull(), "bounds": NSNull(), "position": NSNull(), "contents": NSNull(),
+                                             "transform": NSNull(), "anchorPoint": NSNull(), "frame": NSNull(), "hidden": NSNull()]
+        for l in [canvas, content, cropMask, testPattern] { l.actions = noActions }
+        canvas.anchorPoint = .zero
+        content.anchorPoint = .zero
+        cropMask.backgroundColor = CGColor(gray: 1, alpha: 1)
+        content.mask = cropMask
+        testPattern.contentsGravity = .resize
+        rootLayer.addSublayer(canvas)
+        canvas.addSublayer(content)
+        canvas.addSublayer(testPattern)
         func pair(_ source: AVPlayerLayer, slot: SongSlot?, parent: CALayer?) -> Pair {
-            // У AVPlayerLayer свои внутренние слои — картинку берём прямо из слота
             let mirror = AVPlayerLayer(player: source.player)
             mirror.videoGravity = .resize
             mirror.opacity = 0
             mirror.actions = noActions
             var image: CALayer?
             if slot != nil {
+                // У AVPlayerLayer свои внутренние слои — картинку берём прямо из слота
                 let l = CALayer()
                 l.contentsGravity = .resize
-                l.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
                 l.actions = noActions
                 mirror.addSublayer(l)
                 image = l
@@ -503,7 +581,7 @@ final class PreviewMirror {
         pairs = [pair(engine.logo.layer, slot: nil, parent: nil)]
             + engine.slots.map { pair($0.layer, slot: $0, parent: nil) }
             + engine.extras.slots.map { pair($0.layer, slot: $0, parent: engine.extras.container) }
-        for p in pairs { rootLayer.addSublayer(p.mirror) }
+        for p in pairs { content.addSublayer(p.mirror) }
         rootLayer.actions = ["bounds": NSNull(), "position": NSNull()]
     }
 
@@ -520,10 +598,23 @@ final class PreviewMirror {
         let k = dst.width / src.width
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        if canvas.bounds != src { canvas.bounds = src }
+        canvas.position = .zero
+        let scale = CATransform3DMakeScale(k, k, 1)
+        if !CATransform3DEqualToTransform(canvas.transform, scale) { canvas.transform = scale }
+        if content.bounds != src { content.bounds = src }
+        content.position = .zero
+        if !CATransform3DEqualToTransform(content.transform, engine.contentLayer.transform) {
+            content.transform = engine.contentLayer.transform
+        }
+        if let mask = engine.contentLayer.mask, cropMask.frame != mask.frame { cropMask.frame = mask.frame }
+        testPattern.frame = src
+        if testPattern.isHidden != engine.testPatternLayer.isHidden { testPattern.isHidden = engine.testPatternLayer.isHidden }
+        if (testPattern.contents as AnyObject?) !== (engine.testPatternLayer.contents as AnyObject?) {
+            testPattern.contents = engine.testPatternLayer.contents
+        }
         for p in pairs {
-            let f = p.source.frame
-            let frame = CGRect(x: f.minX * k, y: f.minY * k, width: f.width * k, height: f.height * k)
-            if p.mirror.frame != frame { p.mirror.frame = frame }
+            if p.mirror.frame != p.source.frame { p.mirror.frame = p.source.frame }
             var opacity = p.source.presentation()?.opacity ?? p.source.opacity
             if let parent = p.parent { opacity *= parent.presentation()?.opacity ?? parent.opacity }
             if p.mirror.opacity != opacity { p.mirror.opacity = opacity }

@@ -30,14 +30,13 @@ struct MainView: View {
                 liveButton
             }
         }
-        .searchable(text: $search, placement: .toolbar, prompt: "Search setlist")
+        .modifier(SearchInShow(enabled: ui.mode == .show, text: $search))
     }
 
     @ViewBuilder
     private var detail: some View {
         if ui.mode == .screenFit {
-            ContentUnavailableView("Screen Fit", systemImage: "crop",
-                                   description: Text("Fitting the picture to the venue screen comes in the next step."))
+            ScreenFitView(show: show)
         } else if show.settings.setlists.isEmpty {
             FirstLaunchView(show: show, ui: ui)
         } else if let id = ui.selectedSetlist, show.setlist(id) != nil {
@@ -72,12 +71,27 @@ struct MainView: View {
         case .live(let display): parts = ["LIVE", display]
         case .waitingForDisplay: parts = ["LIVE", "Waiting for display…"]
         }
+        if let preset = show.venuePresetName { parts.append("preset «\(preset)»") }
         switch show.logic.state {
         case .lost: parts.append("Logic not connected")
         case .noSession: parts.append("No network MIDI session")
         default: break
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// Поиск по сет-листу — только на экране Show (в Screen Fit искать нечего)
+private struct SearchInShow: ViewModifier {
+    let enabled: Bool
+    @Binding var text: String
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.searchable(text: $text, placement: .toolbar, prompt: "Search setlist")
+        } else {
+            content
+        }
     }
 }
 

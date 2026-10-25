@@ -464,6 +464,55 @@ do {
     check(d.output(at: logic.now).isSong(2, locked: false), "Картинка: ручной запуск — висит бесконечно")
 }
 
+// Screen Fit: геометрия
+do {
+    let w = 1920.0, h = 1080.0
+    func near(_ a: (x: Double, y: Double), _ x: Double, _ y: Double, _ eps: Double = 0.01) -> Bool {
+        abs(a.x - x) < eps && abs(a.y - y) < eps
+    }
+    var f = ScreenFit()
+    check(f.isIdentity, "Screen Fit: по умолчанию ничего не меняется")
+    var q = f.quad(width: w, height: h)
+    check(near(q[0], 0, 0) && near(q[2], w, h), "Screen Fit: без правок — весь экран")
+
+    f.scale = 50
+    q = f.quad(width: w, height: h)
+    check(near(q[0], 480, 270) && near(q[2], 1440, 810), "Screen Fit: Scale 50% — по центру вдвое меньше")
+    f.positionX = 100; f.positionY = -20
+    q = f.quad(width: w, height: h)
+    check(near(q[0], 580, 250), "Screen Fit: Position сдвигает (Y вверх)")
+    f.transformOn = false
+    check(f.isIdentity, "Screen Fit: выключенный Transform не действует")
+
+    f = ScreenFit()
+    f.rotation = 90
+    q = f.quad(width: w, height: h)
+    // Нижний левый угол (0,0) вокруг центра (960,540) на 90° против часовой → (1500, -420)
+    check(near(q[0], 1500, -420), "Screen Fit: поворот против часовой: \(q[0])")
+    let back = f.invertTransform(f.applyTransform((100, 200), width: w, height: h), width: w, height: h)
+    check(near(back, 100, 200), "Screen Fit: обратное преобразование")
+
+    f = ScreenFit()
+    f.cropLeft = 100; f.cropTop = 50
+    let r = f.cropRect(width: w, height: h)
+    check(r.x == 100 && r.y == 0 && r.w == 1820 && r.h == 1030, "Screen Fit: Crop слева и сверху")
+
+    f = ScreenFit()
+    f.topRight = .init(x: -200, y: -100)
+    f.bottomLeft = .init(x: 50, y: 30)
+    q = f.quad(width: w, height: h)
+    check(near(q[2], 1720, 980) && near(q[0], 50, 30), "Screen Fit: Distort двигает углы")
+    if let hm = f.homography(width: w, height: h) {
+        let src = [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]
+        let ok = zip(src, q).allSatisfy { near(ScreenFit.apply(hm, $0), $1.x, $1.y, 0.001) }
+        check(ok, "Screen Fit: гомография переводит углы кадра в углы четырёхугольника")
+    } else { check(false, "Screen Fit: гомография посчитана") }
+
+    // Старый файл настроек без каких-то полей читается
+    let partial = try! JSONDecoder().decode(ScreenFit.self, from: Data(#"{"scale": 80}"#.utf8))
+    check(partial.scale == 80 && partial.scaleX == 100 && partial.cropOn, "Screen Fit: неполный JSON читается")
+}
+
 extension Director {
     func toggleLogoForTest() {
         stopManual()
