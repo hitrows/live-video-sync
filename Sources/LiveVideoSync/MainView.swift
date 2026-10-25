@@ -125,7 +125,7 @@ private struct Sidebar: View {
                         Text(playlist.name).lineLimit(1)
                         Spacer()
                         if show.extrasNow?.playlist == playlist.id {
-                            Image(systemName: "speaker.wave.2")
+                            Image(systemName: "play.rectangle")
                                 .foregroundStyle(show.settings.live ? .red : .secondary)
                                 .help("Playing now, instead of the setlist")
                         }
