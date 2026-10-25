@@ -178,25 +178,45 @@ enum MTCSysex: Equatable {
 /// Часы Logic по MTC. Полный код приходит каждые 2 кадра, между ними позицию продолжаем по своим часам.
 /// Сеть добавляет задержку — берём максимум смещения за последние 2 с: это самый «быстрый», наименее задержанный пакет.
 struct MTCClock {
-    static let timeout = 0.3
+    /// Сколько можно не получать таймкод и считать, что он идёт (перебои Wi-Fi на концерте — до сотен мс)
+    static let timeout = 1.0
     static let window = 2.0
 
     private var samples: [(host: Double, offset: Double)] = []
+    /// Скачок позиции, ждущий подтверждения следующим полным кодом
+    private var pendingJump: (host: Double, offset: Double)?
     private(set) var lastQuarterFrameHost: Double?
     private(set) var rate: MTCRate = .fps25
 
+    /// Статистика для лога качества сети (сбрасывает тот, кто её читает)
+    var stats = Stats()
+    struct Stats {
+        var quarterFrames = 0
+        var maxGap = 0.0
+        var rejectedJumps = 0
+        var acceptedJumps = 0
+    }
+
     mutating func reset() {
         samples = []
+        pendingJump = nil
     }
 
     /// Остановка (MMC Stop) — считаем, что таймкода больше нет
     mutating func stop() {
         samples = []
+        pendingJump = nil
         lastQuarterFrameHost = nil
     }
 
-    mutating func noteQuarterFrame(host: Double) {
+    /// Возвращает паузу с прошлого кусочка (с)
+    @discardableResult
+    mutating func noteQuarterFrame(host: Double) -> Double {
+        let gap = lastQuarterFrameHost.map { host - $0 } ?? 0
+        stats.quarterFrames += 1
+        if gap > stats.maxGap, gap < 3600 { stats.maxGap = gap }
         lastQuarterFrameHost = max(host, lastQuarterFrameHost ?? host)
+        return gap
     }
 
     /// Идут ли кусочки MTC прямо сейчас
@@ -208,9 +228,24 @@ struct MTCClock {
     mutating func addAnchor(position: Double, host: Double, rate: MTCRate) {
         self.rate = rate
         let offset = position - host
-        // Перемотка — старые замеры больше не годятся
         if let estimate = offsetEstimate, abs(offset - estimate) > 0.5 {
-            samples.removeAll()
+            // Скачок позиции: настоящая перемотка в Logic или испорченный в сети код.
+            // Верим, только если следующий полный код говорит то же самое (через 2 кадра)
+            // Подтверждение должно прийти быстро: настоящая перемотка даёт следующий код через 2 кадра,
+            // а повторившийся мусор через секунду — не подтверждение
+            if let pending = pendingJump, abs(pending.offset - offset) < 0.15, host - pending.host < 0.5 {
+                samples = [(pending.host, pending.offset)]
+                pendingJump = nil
+                stats.acceptedJumps += 1
+            } else {
+                if pendingJump != nil { stats.rejectedJumps += 1 }
+                pendingJump = (host, offset)
+                return
+            }
+        } else if pendingJump != nil {
+            // Следующий код совпал со старой позицией — скачок был мусором
+            pendingJump = nil
+            stats.rejectedJumps += 1
         }
         samples.append((host, offset))
         samples.removeAll { host - $0.host > Self.window }

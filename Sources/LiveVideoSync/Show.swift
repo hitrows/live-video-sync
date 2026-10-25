@@ -50,6 +50,7 @@ final class Show: ObservableObject {
         applyToEngine()
         engine.urlForCue = { [weak self] id in self?.songs.first { $0.id == id }?.url }
         director.onCueLearned = { [weak self] id, position in self?.learned(id, at: position) }
+        director.onTimecodeGap = { gap in Log.info("Таймкод: пауза \(Int(gap * 1000)) мс") }
         midi.onEvents = { [weak self] events in
             guard let self else { return }
             for (event, host) in events {
@@ -250,6 +251,16 @@ final class Show: ObservableObject {
         ticks += 1
         if ticks % 12 == 0 { updateStatus(out, now: now) }
         if ticks % 60 == 0 { Store.heartbeat() }
+        // Качество сети: раз в 10 с, пока идёт таймкод
+        if ticks % 600 == 0 {
+            let s = director.takeClockStats()
+            if s.quarterFrames > 0 {
+                let perSec = Double(s.quarterFrames) / 10
+                let expected = director.clock.rate.fps * 4
+                Log.info(String(format: "Таймкод: %.0f из %.0f сообщ./с (%.0f%%), макс. пауза %d мс, отброшено скачков %d, принято перемоток %d",
+                                perSec, expected, min(100, perSec / expected * 100), Int(s.maxGap * 1000), s.rejectedJumps, s.acceptedJumps))
+            }
+        }
         if ticks % 300 == 0, case .song(let id, let position, let locked) = out {
             let drift = engine.activeSlot?.drift.map { "\(Int($0 * 1000)) мс" } ?? "—"
             Log.info("Песня \(id): \(String(format: "%.2f", position)) с, \(locked ? "по таймкоду" : "сама"), расхождение \(drift)")

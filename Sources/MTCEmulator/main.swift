@@ -23,6 +23,8 @@ final class Emulator {
     var autostops: [Double] = []
     var sendMMC = true
     var linkUp = true
+    /// Доля теряемых сообщений таймкода (имитация плохого Wi-Fi), 0…1
+    var lossRate = 0.0
 
     private var client = MIDIClientRef()
     private var source = MIDIEndpointRef()
@@ -114,7 +116,18 @@ final class Emulator {
         }
     }
 
-    private func sendQF(_ byte: UInt8) { if linkUp { send(UMPEncoder.quarterFrame(byte)) } }
+    private func sendQF(_ byte: UInt8) {
+        guard linkUp, Double.random(in: 0..<1) >= lossRate else { return }
+        send(UMPEncoder.quarterFrame(byte))
+    }
+
+    /// Испорченный полный код (как приходит через плохую сеть) — позиция на 10 минут дальше
+    func glitch() {
+        queue.sync {
+            let bad = Timecode(realSeconds: position + 600, rate: rate)
+            for b in MTCEncoder.quarterFrames(bad) { send(UMPEncoder.quarterFrame(b)) }
+        }
+    }
     private func sendSysex(_ p: [UInt8]) { if linkUp { send(UMPEncoder.sysex(p)) } }
 
     private func sendNote(_ note: Int) {
@@ -231,6 +244,8 @@ let help = """
   play | stop                — транспорт (stop шлёт MMC Stop, если mmc on)
   goto <N>                   — к началу песни N;  goto <чч:мм:сс:кк> — к таймкоду
   goto <N> +<сек>            — в середину песни N
+  loss <проценты>            — терять часть таймкода (плохой Wi-Fi), loss 0 — без потерь
+  glitch                     — отправить испорченный код (скачок на 10 минут)
   drop | restore             — обрыв связи (Logic играет, но ничего не доходит) / связь вернулась
   mmc on|off                 — слать ли MMC Stop/Play (проверить, что будет, если Logic не шлёт)
   wait <сек>                 — пауза (для сценариев)
@@ -254,6 +269,11 @@ func execute(_ line: String) -> Bool {
         }
         if parts.count >= 3, parts[2].hasPrefix("+"), let extra = Double(parts[2].dropFirst()) { target = target.map { $0 + extra } }
         if let target { emulator.locate(target) } else { print("Не понял, куда: \(parts[1])") }
+    case "loss":
+        let pct = parts.count >= 2 ? Double(parts[1]) ?? 0 : 0
+        emulator.lossRate = max(0, min(100, pct)) / 100
+        log("потери таймкода: \(Int(pct))%")
+    case "glitch": emulator.glitch(); log("⚡ испорченный код")
     case "drop": emulator.linkUp = false; log("✂ связь оборвана")
     case "restore": emulator.linkUp = true; log("↺ связь вернулась")
     case "mmc":

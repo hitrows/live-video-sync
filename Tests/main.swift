@@ -136,10 +136,14 @@ do {
     clock.noteQuarterFrame(host: 10.08)
     clock.addAnchor(position: 100.08, host: 10.1, rate: .fps25)    // пришёл с задержкой 20 мс
     check(approx(clock.position(at: 10.2), 100.2), "Часы: берётся наименее задержанный замер")
-    check(clock.position(at: 10.5) == nil, "Часы: таймкод пропал через 0.3 с")
+    check(clock.position(at: 10.8) != nil, "Часы: перебой 0.7 с — таймкод ещё считается идущим")
+    check(clock.position(at: 11.2) == nil, "Часы: таймкод пропал через 1 с")
     clock.noteQuarterFrame(host: 10.6)
-    clock.addAnchor(position: 50, host: 10.6, rate: .fps25)        // перемотка
-    check(approx(clock.position(at: 10.6), 50), "Часы: перемотка сбрасывает замеры")
+    clock.addAnchor(position: 50, host: 10.6, rate: .fps25)        // перемотка: первый код — ещё не верим
+    check(approx(clock.position(at: 10.6), 100.6), "Часы: одиночный скачок не принят: \(String(describing: clock.position(at: 10.6)))")
+    clock.noteQuarterFrame(host: 10.68)
+    clock.addAnchor(position: 50.08, host: 10.68, rate: .fps25)    // второй код подтвердил
+    check(approx(clock.position(at: 10.68), 50.08), "Часы: подтверждённая перемотка принята")
 }
 
 // MARK: - Сценарии шоу
@@ -208,7 +212,7 @@ do {
     logic.play()
     logic.advance(2)
     logic.stop(mmc: false)
-    logic.advance(1)
+    logic.advance(1.5)
     check(d.output(at: logic.now).isSong(3, locked: false), "Стоп без MMC: доигрывает")
     logic.advance(10)
     check(d.output(at: logic.now) == .logo, "Стоп без MMC: потом логотип")
@@ -336,6 +340,41 @@ do {
     logic.play()
     logic.advance(1)
     check(d.output(at: logic.now).isSong(2, locked: true), "Ручной: новый Play в Logic — снова по таймкоду")
+}
+
+// 8. Плохая сеть на концерте
+do {
+    // Испорченный код посреди песни (скачок на 10 минут) — видео не мигает в логотип
+    let d = makeDirector()
+    d.cues[1]!.start = 3600
+    let logic = FakeLogic(d)
+    logic.position = 3605
+    logic.play()
+    logic.advance(1)
+    let garbage = Timecode(realSeconds: 4206, rate: .fps25)
+    for b in MTCEncoder.quarterFrames(garbage) { d.handle(.quarterFrame(b), host: logic.now) }
+    var flicker = false
+    logic.advance(1) { if !d.output(at: logic.now).isSong(1, locked: true) { flicker = true } }
+    check(!flicker, "Сеть: одиночный испорченный код не вызывает мигания")
+    // Такой же мусор через секунду — всё равно не подтверждение
+    for b in MTCEncoder.quarterFrames(Timecode(realSeconds: 4207, rate: .fps25)) { d.handle(.quarterFrame(b), host: logic.now) }
+    logic.advance(1) { if !d.output(at: logic.now).isSong(1, locked: true) { flicker = true } }
+    check(!flicker, "Сеть: повторившийся через секунду мусор не принимается за перемотку")
+
+    // Перебой таймкода 0.6 с — видео остаётся по таймкоду, без режима «сама»
+    var lost = false
+    logic.advance(0.6, send: false) { if !d.output(at: logic.now).isSong(1, locked: true) { lost = true } }
+    check(!lost, "Сеть: перебой 0.6 с не переводит в режим «сама»")
+    logic.advance(1)
+    if case .song(1, let pos, true) = d.output(at: logic.now) {
+        check(approx(pos, 9.6, 0.05), "Сеть: после перебоя позиция верная: \(pos)")
+    } else { check(false, "Сеть: после перебоя снова по таймкоду") }
+
+    // Стоп (Locate) по-прежнему быстрый, хоть допуск пропажи и 1 с
+    logic.stop(mmc: false)
+    d.handle(.sysex(MTCEncoder.mmcLocate(Timecode(realSeconds: 3613, rate: .fps25))), host: logic.now)
+    logic.advance(0.3)
+    check(d.output(at: logic.now) == .logo, "Сеть: стоп по Locate — логотип через ~0.25 с")
 }
 
 extension ShowOutput {

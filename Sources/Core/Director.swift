@@ -32,6 +32,8 @@ final class Director {
     private(set) var manualPlay: (id: Int, host: Double)?
     /// Выучено начало песни: (id, позиция MTC)
     var onCueLearned: ((Int, Double) -> Void)?
+    /// Пауза в таймкоде заметной длины (с) — для лога качества сети
+    var onTimecodeGap: ((Double) -> Void)?
 
     private(set) var clock = MTCClock()
     private var decoder = MTCDecoder()
@@ -46,6 +48,13 @@ final class Director {
     private var lastLocateHost: Double?
     private(set) var lastSongId: Int?
     private(set) var lastKnownPosition: Double?
+
+    /// Статистика таймкода с прошлого вызова (для лога качества сети)
+    func takeClockStats() -> MTCClock.Stats {
+        let s = clock.stats
+        clock.stats = MTCClock.Stats()
+        return s
+    }
 
     func id(forNote note: Int) -> Int { note - markerBaseNote + 1 }
     func note(forId id: Int) -> Int { markerBaseNote + id - 1 }
@@ -73,7 +82,8 @@ final class Director {
                 manualPlay = nil
                 playbackStartHost = host
             }
-            clock.noteQuarterFrame(host: host)
+            let gap = clock.noteQuarterFrame(host: host)
+            if gap > 0.2, gap < MTCClock.timeout { onTimecodeGap?(gap) }
             if let full = decoder.feed(byte) {
                 clock.addAnchor(position: full.position, host: host, rate: full.rate)
                 if let pending = pendingMarker, let pos = clock.extrapolatedPosition(at: pending.host) {
@@ -165,6 +175,16 @@ final class Director {
             manualLogo = true
         }
         if manualLogo { return .logo }
+
+        // Стоп в Logic: пришёл Locate, а таймкод после него не идёт — логотип через четверть секунды,
+        // не дожидаясь, пока таймкод будет считаться пропавшим (это 1 с)
+        if let locate = lastLocateHost, let lastQF = clock.lastQuarterFrameHost,
+           locate >= lastQF - 0.1, now - locate > 0.25 {
+            stoppedByMMC = true
+            freeRun = nil
+            clock.stop()
+            return .logo
+        }
 
         if let pos = clock.position(at: now) {
             lastKnownPosition = pos
