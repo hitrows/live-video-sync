@@ -2,53 +2,111 @@ import AppKit
 import Combine
 import IOKit.pwr_mgt
 
-/// Что показывает монитор в окне управления
-struct MonitorStatus: Equatable {
-    var linkOK = false
-    var link = "—"
-    var mtcRunning = false
-    var timecode = "--:--:--:--"
-    var rate = ""
-    var screenText = "—"
-    var detail = ""
-    var outputText = "—"
-    var sources = ""
+/// Блок Now Playing
+struct NowPlaying: Equatable {
+    enum Mode: Equatable {
+        case logo, black
+        /// Держится за таймкод Logic
+        case locked
+        /// Связь пропала — доигрывает само
+        case free
+        /// Ручной запуск
+        case manual
+    }
+    var mode: Mode = .logo
+    var itemID: UUID?
+    var number: Int?
+    var title = ""
+    var position = 0.0
+    var duration = 0.0
+    var drift: Int?
+    /// «08 Song · marker G#1»
+    var next: String?
 }
 
-/// Сердце программы: MIDI → Director → VideoEngine, настройки, монитор
+/// Связь с Logic для строки статуса и баннеров
+struct LogicStatus: Equatable {
+    enum State: Equatable {
+        /// Таймкод идёт или связь есть
+        case connected
+        /// Ещё не было связи (запуск, Logic Mac не выбран)
+        case waiting
+        /// Связь была и пропала
+        case lost
+        /// На этом Mac нет сетевого MIDI-сеанса
+        case noSession
+    }
+    var state: State = .waiting
+    var macName: String?
+    var timecode: String?
+    var fps: String?
+    var mtcRunning = false
+
+    /// «Logic: MacBook Pro Hitrows · connected · 01:07:32:14 · 24 fps»
+    var line: String {
+        switch state {
+        case .noSession: return "Waiting for Logic · no network MIDI session"
+        case .waiting: return macName.map { "Logic: \($0) · connecting…" } ?? "Waiting for Logic"
+        case .lost: return "Logic: \(macName ?? "Logic Mac") · connection lost"
+        case .connected:
+            var parts = ["Logic: \(macName ?? "connected")", "connected"]
+            if let timecode { parts.append(timecode) }
+            if let fps { parts.append(fps) }
+            return parts.joined(separator: " · ")
+        }
+    }
+}
+
+/// Вывод на экран сцены
+enum OutputState: Equatable {
+    case off
+    case live(display: String)
+    case waitingForDisplay(display: String)
+}
+
+/// Сердце программы: MIDI → Director → VideoEngine, сеты, настройки, состояние для окна
 final class Show: ObservableObject {
     static let shared = Show()
 
     @Published var settings: Settings {
         didSet { if settings != oldValue { settingsChanged(from: oldValue) } }
     }
-    @Published private(set) var songs: [VideoFile] = []
-    @Published private(set) var logoURL: URL?
-    @Published private(set) var problems: [String] = []
-    @Published private(set) var scanning = false
-    @Published private(set) var status = MonitorStatus()
+    /// Что известно о файлах: путь → сведения
+    @Published private(set) var media: [String: MediaInfo] = [:]
+    @Published private(set) var nowPlaying = NowPlaying()
+    @Published private(set) var logic = LogicStatus()
+    @Published private(set) var outputState: OutputState = .off
     @Published private(set) var manualBlack = false
     @Published private(set) var manualLogo = false
+    @Published private(set) var isManual = false
+    /// Найденные в сети Mac + запомненный Logic Mac (для выбора в Settings)
+    @Published private(set) var linkChoices: [LinkTarget] = []
+    @Published private(set) var hasMIDISession = true
+    @Published private(set) var midiSessionName = ""
 
     let director = Director()
     let engine = VideoEngine()
     let midi = MIDIInput()
     let link = NetworkMIDILink()
-    /// Найденные в сети Mac + запомненный Logic Mac (для выбора в окне)
-    @Published private(set) var linkChoices: [LinkTarget] = []
     private(set) lazy var output = OutputController(engine: engine)
+    private(set) lazy var preview = PreviewMirror(engine: engine)
 
     private var timer: Timer?
     private var ticks = 0
     private var sleepAssertion: IOPMAssertionID = 0
+    /// Когда пропала связь с Logic Mac (для баннера — не показывать короткие перебои)
+    private var linkDownSince: Date?
+    private var everConnected = false
 
     private init() {
         settings = Store.loadSettings()
     }
 
     func start() {
+        migrateLegacyFolder()
         applyToEngine()
-        engine.urlForCue = { [weak self] id in self?.songs.first { $0.id == id }?.url }
+        engine.urlForCue = { [weak self] id in self?.activeItem(id)?.url }
+        engine.startForCue = { [weak self] id in self?.activeItem(id)?.trimStart ?? 0 }
         director.onCueLearned = { [weak self] id, position in self?.learned(id, at: position) }
         director.onTimecodeGap = { gap in Log.info("Таймкод: пауза \(Int(gap * 1000)) мс") }
         midi.onEvents = { [weak self] events in
@@ -70,20 +128,62 @@ final class Show: ObservableObject {
 
         output.choice = settings.display
         output.live = settings.live
+        engine.logo.load(settings.logoPath.map(URL.init(fileURLWithPath:)))
         if settings.live { Log.info("Трансляция включается сразу (была включена при прошлом запуске)") }
-        rescan()
+        inspectMedia()
+        rebuildCues()
 
         let t = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(t, forMode: .common)
         timer = t
     }
 
-    // MARK: - Действия
+    // MARK: - Вывод и ручной режим
 
     func toggleLive() {
         settings.live.toggle()
         Log.info(settings.live ? "В эфир" : "Трансляция выключена")
     }
+
+    func toggleBlackout() {
+        director.manualBlack.toggle()
+        Log.info("Затемнение: \(director.manualBlack ? "вкл" : "выкл")")
+        syncManualState()
+    }
+
+    func toggleLogo() {
+        director.stopManual()
+        director.manualLogo.toggle()
+        Log.info("Ручной логотип: \(director.manualLogo ? "вкл" : "выкл")")
+        syncManualState()
+    }
+
+    func resumeSync() {
+        director.resumeSync()
+        Log.info("Resume Sync: снова по Logic")
+        syncManualState()
+    }
+
+    /// Аварийный ручной запуск песни активного сета: до конца, потом логотип
+    func playManually(_ item: SetlistItem) {
+        guard let index = settings.active?.items.firstIndex(where: { $0.id == item.id }) else { return }
+        director.playManually(index + 1, at: HostTime.now)
+        Log.info("Ручной запуск: \(index + 1) \(item.displayName)")
+        syncManualState()
+    }
+
+    private func syncManualState() {
+        if manualBlack != director.manualBlack { manualBlack = director.manualBlack }
+        if manualLogo != director.manualLogo { manualLogo = director.manualLogo }
+        if isManual != director.isManual { isManual = director.isManual }
+    }
+
+    func setScale(_ mode: ScaleMode) {
+        settings.scale = mode
+        Log.info("Масштаб: \(mode.title)")
+    }
+
+    // MARK: - Logic Mac
 
     func connectLogic(_ target: LinkTarget) {
         settings.logicMac = target
@@ -120,116 +220,241 @@ final class Show: ObservableObject {
         if list != linkChoices { linkChoices = list }
     }
 
-    /// Аварийный ручной запуск видео: до конца, потом логотип
-    func playManually(_ song: VideoFile) {
-        director.playManually(song.id, at: HostTime.now)
-        manualLogo = false
-        Log.info("Ручной запуск: \(song.name)")
+    // MARK: - Сеты
+
+    func setlist(_ id: UUID?) -> Setlist? {
+        settings.setlists.first { $0.id == id }
     }
 
-    func toggleBlackout() {
-        director.manualBlack.toggle()
-        manualBlack = director.manualBlack
-        Log.info("Затемнение: \(manualBlack ? "вкл" : "выкл")")
+    /// Песня активного сета по номеру (1…)
+    func activeItem(_ number: Int) -> SetlistItem? {
+        guard let items = settings.active?.items, number >= 1, number <= items.count else { return nil }
+        return items[number - 1]
     }
 
-    func toggleLogo() {
-        director.stopManual()
-        director.manualLogo.toggle()
-        manualLogo = director.manualLogo
-        Log.info("Ручной логотип: \(manualLogo ? "вкл" : "выкл")")
+    private func edit(_ id: UUID, _ body: (inout Setlist) -> Void) {
+        guard let i = settings.setlists.firstIndex(where: { $0.id == id }) else { return }
+        body(&settings.setlists[i])
     }
 
-    func setScale(_ mode: ScaleMode) {
-        settings.scale = mode
-        Log.info("Масштаб: \(mode.title)")
+    @discardableResult
+    func newSetlist(name: String? = nil) -> UUID {
+        let base = name ?? "Untitled Setlist"
+        var title = base
+        var n = 2
+        while settings.setlists.contains(where: { $0.name == title }) {
+            title = "\(base) \(n)"
+            n += 1
+        }
+        let setlist = Setlist(name: title)
+        settings.setlists.append(setlist)
+        // Первый сет сразу активный — играть больше нечему
+        if settings.activeSetlist == nil { settings.activeSetlist = setlist.id }
+        Log.info("Новый сет: \(title)")
+        return setlist.id
     }
 
-    func chooseFolder() {
+    func renameSetlist(_ id: UUID, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        edit(id) { $0.name = trimmed }
+    }
+
+    func deleteSetlist(_ id: UUID) {
+        guard let s = setlist(id) else { return }
+        settings.setlists.removeAll { $0.id == id }
+        if settings.activeSetlist == id { settings.activeSetlist = nil }
+        Log.info("Сет удалён: \(s.name)")
+    }
+
+    func makeActive(_ id: UUID) {
+        guard let s = setlist(id) else { return }
+        settings.activeSetlist = id
+        Log.info("Активный сет: \(s.name)")
+    }
+
+    /// Добавить файлы в сет (перетаскивание или Add Files…); index — куда вставить
+    func addFiles(_ urls: [URL], to id: UUID, at index: Int? = nil) {
+        let files = urls.flatMap(expandFolder).filter(Library.isMedia)
+        guard !files.isEmpty else { return }
+        edit(id) { s in
+            let items = files.map { SetlistItem(path: $0.path) }
+            let at = min(max(0, index ?? s.items.count), s.items.count)
+            s.items.insert(contentsOf: items, at: at)
+        }
+        inspectMedia()
+        Log.info("В сет добавлено файлов: \(files.count)")
+    }
+
+    /// Папку — её видео и картинки по имени
+    private func expandFolder(_ url: URL) -> [URL] {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else { return [url] }
+        return ((try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? [])
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+    }
+
+    func removeItems(_ ids: Set<UUID>, from setlistID: UUID) {
+        edit(setlistID) { $0.items.removeAll { ids.contains($0.id) } }
+    }
+
+    func moveItems(in setlistID: UUID, from offsets: IndexSet, to destination: Int) {
+        edit(setlistID) { $0.items.move(fromOffsets: offsets, toOffset: destination) }
+    }
+
+    /// Move to Position: песня встаёт на позицию (1…), остальные сдвигаются
+    func moveItem(_ itemID: UUID, in setlistID: UUID, toPosition position: Int) {
+        edit(setlistID) { s in
+            guard let from = s.items.firstIndex(where: { $0.id == itemID }) else { return }
+            let item = s.items.remove(at: from)
+            s.items.insert(item, at: min(max(0, position - 1), s.items.count))
+        }
+    }
+
+    func renameItem(_ itemID: UUID, in setlistID: UUID, to title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespaces)
+        edit(setlistID) { s in
+            guard let i = s.items.firstIndex(where: { $0.id == itemID }) else { return }
+            s.items[i].title = trimmed.isEmpty ? nil : trimmed
+        }
+    }
+
+    func setTrim(_ itemID: UUID, in setlistID: UUID, start: Double, end: Double?) {
+        edit(setlistID) { s in
+            guard let i = s.items.firstIndex(where: { $0.id == itemID }) else { return }
+            s.items[i].trimStart = max(0, start)
+            s.items[i].trimEnd = end
+        }
+    }
+
+    func resetMarker(_ itemID: UUID, in setlistID: UUID) {
+        edit(setlistID) { s in
+            guard let i = s.items.firstIndex(where: { $0.id == itemID }) else { return }
+            s.items[i].marker = nil
+        }
+        Log.info("Метка сброшена")
+    }
+
+    func resetMarkers(in setlistID: UUID) {
+        edit(setlistID) { s in
+            for i in s.items.indices { s.items[i].marker = nil }
+        }
+        Log.info("Метки сета сброшены")
+    }
+
+    /// Replace File… и Locate… — выбрать другой файл для песни, метка и имя остаются
+    func replaceFile(_ itemID: UUID, in setlistID: UUID) {
+        guard let item = setlist(setlistID)?.items.first(where: { $0.id == itemID }) else { return }
         let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Use Folder"
-        if let path = settings.folderPath { panel.directoryURL = URL(fileURLWithPath: path) }
-        if panel.runModal() == .OK, let url = panel.url {
-            settings.folderPath = url.path
+        panel.allowedContentTypes = [.movie, .image]
+        panel.prompt = "Choose"
+        panel.message = "Choose the file for “\(item.displayName)”"
+        panel.directoryURL = item.url.deletingLastPathComponent()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        edit(setlistID) { s in
+            guard let i = s.items.firstIndex(where: { $0.id == itemID }) else { return }
+            // Имя в списке сохраняем — его видит музыкант, а не имя файла
+            if s.items[i].title == nil { s.items[i].title = item.displayName }
+            s.items[i].path = url.path
+            s.items[i].trimStart = 0
+            s.items[i].trimEnd = nil
         }
+        inspectMedia()
+        Log.info("Файл песни заменён: \(url.lastPathComponent)")
     }
 
-    /// Метки текущей папки: номер песни → начало в Logic
-    var markers: [Int: Double] {
-        guard let folder = settings.folderPath, let list = settings.markers[folder] else { return [:] }
-        return Dictionary(uniqueKeysWithValues: list.compactMap { key, value in Int(key).map { ($0, value) } })
+    func showInFinder(_ item: SetlistItem) {
+        NSWorkspace.shared.activateFileViewerSelecting([item.url])
     }
 
-    private func setMarker(_ id: Int, _ position: Double?) {
-        guard let folder = settings.folderPath else { return }
-        var list = settings.markers[folder] ?? [:]
-        list[String(id)] = position
-        settings.markers[folder] = list.isEmpty ? nil : list
+    func info(_ item: SetlistItem) -> MediaInfo? { media[item.path] }
+
+    /// Длительность песни с учётом обрезки
+    func duration(_ item: SetlistItem) -> Double? {
+        guard let info = media[item.path], info.playable, !info.isImage else { return nil }
+        let end = min(item.trimEnd ?? info.duration, info.duration)
+        return max(0.1, end - item.trimStart)
     }
 
-    func resetMarkers() {
-        if let folder = settings.folderPath { settings.markers[folder] = nil }
-        rebuildCues()
-        Log.info("Метки сброшены")
+    func totalDuration(_ setlist: Setlist) -> Double {
+        setlist.items.compactMap(duration).reduce(0, +)
     }
 
-    func resetMarker(_ song: VideoFile) {
-        setMarker(song.id, nil)
-        rebuildCues()
-    }
-
-    func rescan() {
-        guard let path = settings.folderPath else {
-            songs = []
-            logoURL = nil
-            problems = ["Choose the video folder"]
-            rebuildCues()
-            return
-        }
-        scanning = true
-        let folder = URL(fileURLWithPath: path)
-        Task { @MainActor in
-            let scan = await Library.scan(folder: folder)
-            self.apply(scan)
-        }
+    func chooseLogo() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.movie]
+        panel.prompt = "Use as Logo"
+        if let path = settings.logoPath { panel.directoryURL = URL(fileURLWithPath: path).deletingLastPathComponent() }
+        if panel.runModal() == .OK, let url = panel.url { settings.logoPath = url.path }
     }
 
     // MARK: - Внутреннее
 
-    private func apply(_ scan: LibraryScan) {
-        scanning = false
-        songs = scan.songs
-        logoURL = scan.logo
-        problems = scan.problems
-        engine.logo.load(scan.logo)
-        engine.reloadSongs()
-        rebuildCues()
-        Log.info("Папка: \(scan.songs.count) песен, логотип: \(scan.logo?.lastPathComponent ?? "нет")"
-                 + (scan.problems.isEmpty ? "" : "; замечания: \(scan.problems.joined(separator: "; "))"))
+    /// Старый формат (одна папка с номерами) → сет с тем же порядком и выученными метками
+    private func migrateLegacyFolder() {
+        guard settings.setlists.isEmpty, let path = settings.legacyFolderPath else { return }
+        let folder = URL(fileURLWithPath: path)
+        let scan = Library.scanLegacyFolder(folder)
+        let marks = settings.legacyMarkers[path] ?? [:]
+        let items = scan.songs.map { SetlistItem(path: $0.url.path, marker: marks[String($0.number)]) }
+        let name = folder.lastPathComponent
+        let setlist = Setlist(name: name.isEmpty ? "Setlist" : name, items: items)
+        settings.setlists = [setlist]
+        settings.activeSetlist = setlist.id
+        if settings.logoPath == nil { settings.logoPath = scan.logo?.path }
+        let numbers = scan.songs.map(\.number)
+        if !numbers.isEmpty, numbers != Array(1...numbers.count) {
+            Log.info("Перенос: номера файлов с пропусками \(numbers) — ноты-метки теперь по позиции в списке, проверь ноты в Logic")
+        }
+        settings.legacyFolderPath = nil
+        settings.legacyMarkers = [:]
+        Log.info("Перенос: папка «\(name)» → сет из \(items.count) песен, логотип: \(scan.logo?.lastPathComponent ?? "нет")")
+    }
+
+    /// Проверить файлы, о которых ещё ничего не известно (и пропавшие — вдруг появились)
+    private func inspectMedia() {
+        var paths = Set(settings.setlists.flatMap { $0.items.map(\.path) })
+        if let logo = settings.logoPath { paths.insert(logo) }
+        let todo = paths.filter { media[$0] == nil || media[$0]?.missing == true }
+        guard !todo.isEmpty else { return }
+        Task { @MainActor in
+            for path in todo {
+                let info = await Library.inspect(URL(fileURLWithPath: path))
+                if media[path] != info {
+                    if info.missing, media[path]?.missing != true { Log.info("Файл не найден: \(path)") }
+                    if let error = info.error { Log.info("Файл \(path): \(error)") }
+                    media[path] = info
+                    rebuildCues()
+                }
+            }
+        }
     }
 
     private func rebuildCues() {
-        let known = markers
-        director.cues = Dictionary(uniqueKeysWithValues: songs.map {
-            ($0.id, CueInfo(id: $0.id, duration: $0.duration, start: known[$0.id]))
-        })
+        let items = settings.active?.items ?? []
+        var cues: [Int: CueInfo] = [:]
+        for (i, item) in items.enumerated() {
+            guard let d = duration(item) else { continue }
+            cues[i + 1] = CueInfo(id: i + 1, duration: d, start: item.marker)
+        }
+        if cues != director.cues { director.cues = cues }
     }
 
     private func learned(_ id: Int, at position: Double) {
-        guard songs.contains(where: { $0.id == id }) else { return }
-        setMarker(id, position)
-        Log.info("Метка: песня \(id) начинается в \(Timecode(realSeconds: position, rate: director.clock.rate).text)")
+        guard let active = settings.activeSetlist, let item = activeItem(id) else { return }
+        edit(active) { s in
+            if let i = s.items.firstIndex(where: { $0.id == item.id }) { s.items[i].marker = position }
+        }
+        Log.info("Метка: песня \(id) «\(item.displayName)» начинается в \(Timecode(realSeconds: position, rate: director.clock.rate).text)")
     }
 
     private func applyToEngine() {
-        engine.fadeOut = settings.fadeOut
-        engine.fadeIn = settings.fadeIn
-        engine.crossfade = settings.crossfade
+        let d = settings.transition == .cut ? 0 : settings.transitionDuration
+        engine.fadeOut = d
+        engine.fadeIn = d
+        engine.crossfade = settings.transition == .crossfade
         engine.scale = settings.scale
-        director.fadeOut = settings.fadeOut
+        director.fadeOut = d
         director.markerBaseNote = settings.markerBaseNote
     }
 
@@ -238,8 +463,13 @@ final class Show: ObservableObject {
         applyToEngine()
         output.choice = settings.display
         output.live = settings.live
-        if settings.folderPath != old.folderPath {
-            rescan()
+        if settings.logoPath != old.logoPath {
+            engine.logo.load(settings.logoPath.map(URL.init(fileURLWithPath:)))
+            inspectMedia()
+        }
+        if settings.setlists != old.setlists || settings.activeSetlist != old.activeSetlist {
+            inspectMedia()
+            rebuildCues()
         }
     }
 
@@ -247,10 +477,13 @@ final class Show: ObservableObject {
         let now = HostTime.now
         let out = director.output(at: now)
         engine.update(out, next: director.nextCue(after: out), now: now)
+        preview.sync()
 
         ticks += 1
-        if ticks % 12 == 0 { updateStatus(out, now: now) }
+        if ticks % 6 == 0 { updateStatus(out, now: now) }
         if ticks % 60 == 0 { Store.heartbeat() }
+        // Пропавшие файлы (отключённый диск) — проверить, не вернулись ли
+        if ticks % 300 == 0, media.values.contains(where: \.missing) { inspectMedia() }
         // Качество сети: раз в 10 с, пока идёт таймкод
         if ticks % 600 == 0 {
             let s = director.takeClockStats()
@@ -268,58 +501,90 @@ final class Show: ObservableObject {
     }
 
     private func updateStatus(_ out: ShowOutput, now: Double) {
-        var s = MonitorStatus()
-        let connections = self.link.connections
-        let age = director.lastMessageHost.map { now - $0 }
-        s.linkOK = !connections.isEmpty || (age ?? 99) < 2
-        var link: String
-        if !self.link.hasSession {
-            link = "No network MIDI session (create one in Audio MIDI Setup)"
-        } else if connections.isEmpty {
-            link = "Logic Mac not connected"
+        syncManualState()
+        updateNowPlaying(out)
+        updateLogic(now: now)
+
+        let state: OutputState
+        if !settings.live {
+            state = .off
+        } else if let target = output.currentTarget {
+            state = .live(display: target)
         } else {
-            link = "Network: " + connections.map { "\($0.name) (\($0.state))" }.joined(separator: ", ")
+            state = .waitingForDisplay(display: expectedDisplayName)
         }
-        if let age { link += age < 1 ? " · MIDI live" : " · last MIDI \(Self.ago(age)) ago" }
-        s.link = link
-        s.sources = midi.sourceNames.joined(separator: ", ")
+        if state != outputState { outputState = state }
+    }
+
+    private func updateNowPlaying(_ out: ShowOutput) {
+        var n = NowPlaying()
+        switch out {
+        case .black:
+            n.mode = .black
+        case .logo:
+            n.mode = .logo
+        case .song(let id, let position, let locked):
+            n.mode = director.manualPlay != nil ? .manual : locked ? .locked : .free
+            n.number = id
+            n.position = position
+            if let item = activeItem(id) {
+                n.itemID = item.id
+                n.title = item.displayName
+                n.duration = duration(item) ?? 0
+            }
+            n.drift = engine.activeSlot?.drift.map { Int(($0 * 1000).rounded()) }
+        }
+        if let next = director.nextCue(after: out), let item = activeItem(next) {
+            n.next = String(format: "%02d", next) + " " + item.displayName
+                + " · marker " + Self.noteName(settings.markerBaseNote + next - 1)
+        }
+        if n != nowPlaying { nowPlaying = n }
+    }
+
+    private func updateLogic(now: Double) {
+        var s = LogicStatus()
+        let session = link.hasSession
+        if session != hasMIDISession { hasMIDISession = session }
+        let name = link.sessionName
+        if name != midiSessionName { midiSessionName = name }
+
+        let connections = link.connections
+        let age = director.lastMessageHost.map { now - $0 }
+        let midiFlowing = (age ?? 99) < 2
+        let connected = !connections.isEmpty || midiFlowing
+        s.macName = connections.first?.name ?? settings.logicMac?.name
 
         let clock = director.clock
         if let pos = clock.position(at: now) {
             s.mtcRunning = true
             s.timecode = Timecode(realSeconds: pos, rate: clock.rate).text
-            s.rate = "\(clock.rate.label) fps"
+            s.fps = "\(clock.rate.label) fps"
         } else if let pos = director.lastKnownPosition {
             s.timecode = Timecode(realSeconds: pos, rate: clock.rate).text
-            s.rate = "stopped"
         }
 
-        switch out {
-        case .black:
-            s.screenText = "Blackout"
-        case .logo:
-            s.screenText = logoURL == nil ? "Logo (no file — black)" : "Logo"
-            if let next = director.nextCue(after: out), let song = songs.first(where: { $0.id == next }) {
-                s.detail = "Next: \(song.name)"
-            }
-        case .song(let id, let position, let locked):
-            let name = songs.first { $0.id == id }?.name ?? "#\(id)"
-            s.screenText = name
-            var detail = "\(Self.clock(position)) · \(locked ? "locked to MTC" : "free run (no signal)")"
-            if let drift = engine.activeSlot?.drift { detail += String(format: " · drift %+d ms", Int(drift * 1000)) }
-            s.detail = detail
-        }
-        if manualBlack != director.manualBlack { manualBlack = director.manualBlack }
-        if manualLogo != director.manualLogo { manualLogo = director.manualLogo }
-
-        if !settings.live {
-            s.outputText = "Off"
-        } else if let target = output.currentTarget {
-            s.outputText = "Live on \(target)"
+        if connected {
+            everConnected = true
+            linkDownSince = nil
+            s.state = .connected
+        } else if !session {
+            s.state = .noSession
         } else {
-            s.outputText = "Waiting for display…"
+            let since = linkDownSince ?? Date()
+            linkDownSince = since
+            // Короткие перебои и первые секунды после запуска — не тревога
+            s.state = everConnected && Date().timeIntervalSince(since) > 3 ? .lost : .waiting
         }
-        if s != status { status = s }
+        if s != logic { logic = s }
+    }
+
+    /// Как называется экран сцены, пока его нет
+    var expectedDisplayName: String {
+        switch settings.display {
+        case .specific(let ref): return ref.name
+        case .firstExternal: return "Stage display"
+        case .window: return "Test window"
+        }
     }
 
     /// Не гасить экран и не засыпать, пока программа работает
@@ -330,12 +595,22 @@ final class Show: ObservableObject {
         Log.info(result == kIOReturnSuccess ? "Сон экрана запрещён" : "Не удалось запретить сон экрана (\(result))")
     }
 
-    static func clock(_ seconds: Double) -> String {
-        let s = max(0, seconds)
-        return String(format: "%d:%05.2f", Int(s) / 60, s.truncatingRemainder(dividingBy: 60))
+    /// 3:42
+    static func minutes(_ seconds: Double) -> String {
+        let s = Int(max(0, seconds).rounded())
+        return "\(s / 60):" + String(format: "%02d", s % 60)
     }
 
-    static func ago(_ seconds: Double) -> String {
-        seconds < 60 ? "\(Int(seconds)) s" : seconds < 3600 ? "\(Int(seconds / 60)) min" : "\(Int(seconds / 3600)) h"
+    /// 02:14.6
+    static func clock(_ seconds: Double) -> String {
+        let s = max(0, seconds)
+        return String(format: "%02d:%04.1f", Int(s) / 60, s.truncatingRemainder(dividingBy: 60))
+    }
+
+    /// Имена нот как в Logic: 36 = C1, 60 = C3
+    static func noteName(_ n: Int) -> String {
+        let names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        guard (0...127).contains(n) else { return "—" }
+        return "\(names[n % 12])\(n / 12 - 2)"
     }
 }

@@ -6,6 +6,9 @@ final class SongSlot {
     let player = AVPlayer()
     let layer: AVPlayerLayer
     private(set) var cueId: Int?
+    private(set) var url: URL?
+    /// Начало видео после обрезки (Trim), с
+    private(set) var startOffset = 0.0
     private(set) var started = false
     private var prerolled = false
     private var graceUntil = 0.0
@@ -23,12 +26,15 @@ final class SongSlot {
         layer.opacity = 0
     }
 
-    func load(id: Int, url: URL) {
+    func load(id: Int, url: URL, start: Double = 0) {
         cueId = id
+        self.url = url
+        startOffset = start
         started = false
         prerolled = false
         drift = nil
         player.replaceCurrentItem(with: AVPlayerItem(url: url))
+        if start > 0 { player.seek(to: CMTime(seconds: start, preferredTimescale: 90_000), toleranceBefore: .zero, toleranceAfter: .zero) }
         Log.info("Слот: загружена песня \(id) (\(url.lastPathComponent))")
     }
 
@@ -90,6 +96,7 @@ final class SongSlot {
     func unload() {
         player.replaceCurrentItem(with: nil)
         cueId = nil
+        url = nil
         started = false
         prerolled = false
         drift = nil
@@ -101,7 +108,7 @@ final class SongSlot {
         started = false
         prerolled = false
         drift = nil
-        player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+        player.seek(to: CMTime(seconds: startOffset, preferredTimescale: 90_000), toleranceBefore: .zero, toleranceAfter: .zero)
     }
 }
 
@@ -149,6 +156,8 @@ final class VideoEngine {
     var fadeIn = 0.7
     var crossfade = false
     var urlForCue: (Int) -> URL? = { _ in nil }
+    /// Начало видео песни после обрезки (Trim), с
+    var startForCue: (Int) -> Double = { _ in 0 }
 
     private(set) var visible: Element = .black
     private var pendingFadeIn: (element: Element, notBefore: Double, since: Double)?
@@ -156,6 +165,8 @@ final class VideoEngine {
 
     init() {
         rootLayer.backgroundColor = CGColor(gray: 0, alpha: 1)
+        // Пока экрана сцены нет — пропорции 16:9 (для превью)
+        rootLayer.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
         for layer in [logo.layer] + slots.map(\.layer) {
             layer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
             layer.actions = ["opacity": NSNull(), "bounds": NSNull(), "position": NSNull()]
@@ -231,7 +242,7 @@ final class VideoEngine {
                     show(.logo, now: now)
                     break
                 }
-                slots[i].follow(position: position, now: now)
+                slots[i].follow(position: position + slots[i].startOffset, now: now)
                 show(.slot(i), now: now)
             } else {
                 show(.logo, now: now)
@@ -254,7 +265,7 @@ final class VideoEngine {
 
         // Следующая песня — заранее во втором слоте
         if let next, slotIndex(holding: next) == nil, let i = freeSlotIndex(), let url = urlForCue(next) {
-            slots[i].load(id: next, url: url)
+            slots[i].load(id: next, url: url, start: startForCue(next))
         }
 
         if let pending = pendingFadeIn, now >= pending.notBefore {
@@ -278,7 +289,9 @@ final class VideoEngine {
     }
 
     private func slotIndex(holding id: Int) -> Int? {
-        slots.firstIndex { $0.cueId == id && $0.player.currentItem != nil }
+        // И номер, и файл: после перестановки песен номер 3 — уже другой файл
+        let url = urlForCue(id)
+        return slots.firstIndex { $0.cueId == id && $0.url == url && $0.player.currentItem != nil }
     }
 
     /// Свободный слот: не на экране, не уходит в fade-out
@@ -296,7 +309,7 @@ final class VideoEngine {
             fade(slots[i].layer, to: 0, duration: 0)
             fadingOutUntil[i] = nil
         }
-        slots[i].load(id: id, url: url)
+        slots[i].load(id: id, url: url, start: startForCue(id))
         return i
     }
 
@@ -363,3 +376,49 @@ final class VideoEngine {
     }
 }
 
+
+/// Превью в окне управления: те же плееры, что и на экране сцены, — второй набор слоёв.
+/// Каждый кадр копирует прозрачность и рамки с экрана сцены, масштабируя под свой размер.
+final class PreviewMirror {
+    let rootLayer = CALayer()
+    private let engine: VideoEngine
+    private let layers: [(source: AVPlayerLayer, mirror: AVPlayerLayer)]
+
+    init(engine: VideoEngine) {
+        self.engine = engine
+        rootLayer.backgroundColor = CGColor(gray: 0, alpha: 1)
+        rootLayer.masksToBounds = true
+        layers = ([engine.logo.layer] + engine.slots.map(\.layer)).map { source in
+            let mirror = AVPlayerLayer(player: source.player)
+            mirror.videoGravity = .resize
+            mirror.opacity = 0
+            mirror.actions = ["opacity": NSNull(), "bounds": NSNull(), "position": NSNull(), "transform": NSNull()]
+            return (source, mirror)
+        }
+        for pair in layers { rootLayer.addSublayer(pair.mirror) }
+        rootLayer.actions = ["bounds": NSNull(), "position": NSNull()]
+    }
+
+    /// Пропорции экрана сцены (для рамки превью)
+    var aspect: CGFloat {
+        let b = engine.rootLayer.bounds
+        return b.height > 0 ? b.width / b.height : 16 / 9
+    }
+
+    func sync() {
+        let src = engine.rootLayer.bounds
+        let dst = rootLayer.bounds
+        guard src.width > 0, src.height > 0, dst.width > 0 else { return }
+        let k = dst.width / src.width
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (source, mirror) in layers {
+            let f = source.frame
+            let frame = CGRect(x: f.minX * k, y: f.minY * k, width: f.width * k, height: f.height * k)
+            if mirror.frame != frame { mirror.frame = frame }
+            let opacity = source.presentation()?.opacity ?? source.opacity
+            if mirror.opacity != opacity { mirror.opacity = opacity }
+        }
+        CATransaction.commit()
+    }
+}

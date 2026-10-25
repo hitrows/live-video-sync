@@ -69,6 +69,16 @@ final class Director {
         manualPlay = nil
     }
 
+    /// Есть ручной режим, который снимает Resume Sync
+    var isManual: Bool { manualBlack || manualLogo || manualPlay != nil }
+
+    /// Resume Sync: снять Logo, Blackout и ручной запуск — сразу то, что играет в Logic
+    func resumeSync() {
+        manualBlack = false
+        manualLogo = false
+        manualPlay = nil
+    }
+
     func handle(_ event: MIDIEvent, host: Double) {
         lastMessageHost = host
         switch event {

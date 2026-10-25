@@ -377,6 +377,27 @@ do {
     check(d.output(at: logic.now) == .logo, "Сеть: стоп по Locate — логотип через ~0.25 с")
 }
 
+// Resume Sync: снимает Logo, Blackout и ручной запуск — сразу песня по таймкоду
+do {
+    let d = makeDirector()
+    let logic = FakeLogic(d)
+    d.cues[1]!.start = 3600
+    logic.play()
+    logic.advance(2)
+    check(d.output(at: logic.now).isSong(1, locked: true), "Resume Sync: до ручного режима песня 1 по таймкоду")
+    d.manualLogo = true
+    d.manualBlack = true
+    check(d.isManual, "Resume Sync: ручной режим включён")
+    check(d.output(at: logic.now) == .black, "Resume Sync: Blackout важнее всего")
+    d.resumeSync()
+    check(!d.isManual, "Resume Sync: ручной режим снят")
+    check(d.output(at: logic.now).isSong(1, locked: true), "Resume Sync: сразу песня 1 по таймкоду")
+    d.playManually(3, at: logic.now)
+    check(d.output(at: logic.now).isSong(3, locked: false), "Resume Sync: ручной запуск песни 3")
+    d.resumeSync()
+    check(d.output(at: logic.now).isSong(1, locked: true), "Resume Sync: после ручного запуска — снова песня 1")
+}
+
 extension ShowOutput {
     func isSong(_ id: Int, locked: Bool? = nil) -> Bool {
         if case .song(let i, _, let l) = self { return i == id && (locked == nil || locked == l) }

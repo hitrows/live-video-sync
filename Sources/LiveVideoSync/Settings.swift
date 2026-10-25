@@ -46,39 +46,164 @@ struct LinkTarget: Codable, Equatable, Hashable {
     var ip: String?
 }
 
+/// Песня сет-листа: файл где угодно на диске. Номер и нота-метка = позиция в списке.
+struct SetlistItem: Codable, Equatable, Identifiable, Hashable {
+    var id = UUID()
+    var path: String
+    /// Отображаемое имя (файл не переименовывается); nil — по имени файла
+    var title: String?
+    /// Обрезка (Trim): видео идёт с trimStart и кончается в trimEnd; файл не меняется
+    var trimStart: Double = 0
+    var trimEnd: Double?
+    /// Начало песни в проекте Logic (секунды MTC) — выучено по ноте-метке.
+    /// Хранится у песни: при перестановке песни её место в проекте Logic не меняется.
+    var marker: Double?
+
+    init(path: String, title: String? = nil, marker: Double? = nil) {
+        self.path = path
+        self.title = title
+        self.marker = marker
+    }
+
+    var url: URL { URL(fileURLWithPath: path) }
+
+    /// «03_Song.mp4» → «Song»
+    var displayName: String {
+        if let title, !title.isEmpty { return title }
+        let base = url.deletingPathExtension().lastPathComponent
+        let stripped = base.replacingOccurrences(of: #"^\d+[\s_.\-]*"#, with: "", options: .regularExpression)
+        return stripped.isEmpty ? base : stripped
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        path = try c.decode(String.self, forKey: .path)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        trimStart = try c.decodeIfPresent(Double.self, forKey: .trimStart) ?? 0
+        trimEnd = try c.decodeIfPresent(Double.self, forKey: .trimEnd)
+        marker = try c.decodeIfPresent(Double.self, forKey: .marker)
+    }
+}
+
+struct Setlist: Codable, Equatable, Identifiable, Hashable {
+    var id = UUID()
+    var name: String
+    var items: [SetlistItem] = []
+
+    init(name: String, items: [SetlistItem] = []) {
+        self.name = name
+        self.items = items
+    }
+}
+
+/// Переход между песнями и логотипом
+enum Transition: String, Codable, CaseIterable {
+    /// Через чёрное
+    case fade
+    case crossfade
+    case cut
+
+    var title: String {
+        switch self {
+        case .fade: return "Fade"
+        case .crossfade: return "Crossfade"
+        case .cut: return "Cut"
+        }
+    }
+}
+
+/// Что на экране сцены, пока программа перезапускается после сбоя (обои рабочего стола)
+enum RestartScreen: String, Codable, CaseIterable {
+    case image, black
+}
+
 struct Settings: Codable, Equatable {
-    var folderPath: String?
+    var setlists: [Setlist] = []
+    /// Сет, который играет по Logic
+    var activeSetlist: UUID?
+    var logoPath: String?
     var display: DisplayChoice = .firstExternal
-    var fadeOut: Double = 0.7
-    var fadeIn: Double = 0.7
-    var crossfade = false
+    var transition: Transition = .fade
+    /// Fade out и fade in, с
+    var transitionDuration: Double = 0.7
     var scale: ScaleMode = .fit
     var markerBaseNote = 36
-    /// Выученные начала песен (секунды MTC): папка → номер песни → позиция.
-    /// По номеру, а не по имени файла: видео можно заменять и переименовывать. Своя папка — свой сет и свои метки.
-    var markers: [String: [String: Double]] = [:]
     /// Была ли трансляция включена — после перезапуска включаем снова
     var live = false
     /// С кем держать сетевой MIDI (плеер сам переподключается)
     var logicMac: LinkTarget?
+    var hideDock = true
+    var hidePointer = true
+    var restartScreen: RestartScreen = .image
+    var restartImagePath: String?
+    /// Одна длительность на все картинки Extras, с
+    var extrasImageDuration: Double = 10
+
+    // Старый формат: одна папка с видео «NN_название» и метки по номерам. Переносится в сет при запуске.
+    var legacyFolderPath: String?
+    var legacyMarkers: [String: [String: Double]] = [:]
 
     init() {}
+
+    enum CodingKeys: String, CodingKey {
+        case setlists, activeSetlist, logoPath, display, transition, transitionDuration, scale, markerBaseNote
+        case live, logicMac, hideDock, hidePointer, restartScreen, restartImagePath, extrasImageDuration
+        case legacyFolderPath = "folderPath", legacyMarkers = "markers"
+        case crossfade, fadeOut
+    }
 
     // Новые поля не ломают старый файл настроек
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = Settings()
-        folderPath = try c.decodeIfPresent(String.self, forKey: .folderPath)
+        setlists = (try? c.decodeIfPresent([Setlist].self, forKey: .setlists)) ?? []
+        activeSetlist = try? c.decodeIfPresent(UUID.self, forKey: .activeSetlist)
+        logoPath = try? c.decodeIfPresent(String.self, forKey: .logoPath)
         display = (try? c.decodeIfPresent(DisplayChoice.self, forKey: .display)) ?? d.display
-        fadeOut = try c.decodeIfPresent(Double.self, forKey: .fadeOut) ?? d.fadeOut
-        fadeIn = try c.decodeIfPresent(Double.self, forKey: .fadeIn) ?? d.fadeIn
-        crossfade = try c.decodeIfPresent(Bool.self, forKey: .crossfade) ?? d.crossfade
         scale = (try? c.decodeIfPresent(ScaleMode.self, forKey: .scale)) ?? d.scale
-        markerBaseNote = try c.decodeIfPresent(Int.self, forKey: .markerBaseNote) ?? d.markerBaseNote
-        markers = try c.decodeIfPresent([String: [String: Double]].self, forKey: .markers) ?? [:]
-        live = try c.decodeIfPresent(Bool.self, forKey: .live) ?? false
+        markerBaseNote = (try? c.decodeIfPresent(Int.self, forKey: .markerBaseNote)) ?? d.markerBaseNote
+        live = (try? c.decodeIfPresent(Bool.self, forKey: .live)) ?? false
         logicMac = try? c.decodeIfPresent(LinkTarget.self, forKey: .logicMac)
+        hideDock = (try? c.decodeIfPresent(Bool.self, forKey: .hideDock)) ?? d.hideDock
+        hidePointer = (try? c.decodeIfPresent(Bool.self, forKey: .hidePointer)) ?? d.hidePointer
+        restartScreen = (try? c.decodeIfPresent(RestartScreen.self, forKey: .restartScreen)) ?? d.restartScreen
+        restartImagePath = try? c.decodeIfPresent(String.self, forKey: .restartImagePath)
+        extrasImageDuration = (try? c.decodeIfPresent(Double.self, forKey: .extrasImageDuration)) ?? d.extrasImageDuration
+        legacyFolderPath = try? c.decodeIfPresent(String.self, forKey: .legacyFolderPath)
+        legacyMarkers = (try? c.decodeIfPresent([String: [String: Double]].self, forKey: .legacyMarkers)) ?? [:]
+        // Старые «crossfade» и «fadeOut» → переход и длительность
+        if let t = try? c.decodeIfPresent(Transition.self, forKey: .transition) {
+            transition = t
+        } else if (try? c.decodeIfPresent(Bool.self, forKey: .crossfade)) == true {
+            transition = .crossfade
+        }
+        transitionDuration = (try? c.decodeIfPresent(Double.self, forKey: .transitionDuration))
+            ?? (try? c.decodeIfPresent(Double.self, forKey: .fadeOut)) ?? d.transitionDuration
     }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(setlists, forKey: .setlists)
+        try c.encodeIfPresent(activeSetlist, forKey: .activeSetlist)
+        try c.encodeIfPresent(logoPath, forKey: .logoPath)
+        try c.encode(display, forKey: .display)
+        try c.encode(transition, forKey: .transition)
+        try c.encode(transitionDuration, forKey: .transitionDuration)
+        try c.encode(scale, forKey: .scale)
+        try c.encode(markerBaseNote, forKey: .markerBaseNote)
+        try c.encode(live, forKey: .live)
+        try c.encodeIfPresent(logicMac, forKey: .logicMac)
+        try c.encode(hideDock, forKey: .hideDock)
+        try c.encode(hidePointer, forKey: .hidePointer)
+        try c.encode(restartScreen, forKey: .restartScreen)
+        try c.encodeIfPresent(restartImagePath, forKey: .restartImagePath)
+        try c.encode(extrasImageDuration, forKey: .extrasImageDuration)
+        try c.encodeIfPresent(legacyFolderPath, forKey: .legacyFolderPath)
+        if !legacyMarkers.isEmpty { try c.encode(legacyMarkers, forKey: .legacyMarkers) }
+    }
+
+    var active: Setlist? { setlists.first { $0.id == activeSetlist } }
 }
 
 /// Файлы программы в ~/Library/Application Support/LiveVideoSync/

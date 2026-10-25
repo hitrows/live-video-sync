@@ -1,74 +1,82 @@
 import AVFoundation
 import Foundation
 
-struct VideoFile: Identifiable, Equatable {
-    /// Номер песни из начала имени файла: «03_Song.mp4» → 3
-    let id: Int
-    let url: URL
-    let duration: Double
-    var name: String { url.lastPathComponent }
+/// Что известно о файле песни или Extras
+struct MediaInfo: Equatable {
+    var duration: Double = 0
+    var isImage = false
+    var hasAudio = false
+    var size: CGSize = .zero
+    /// Файла нет на месте (переместили, отключён диск)
+    var missing = false
+    /// Файл есть, но не открывается как видео
+    var error: String?
+    /// Не мешают играть, но старт с середины или подстройка будут медленными
+    var warnings: [String] = []
+
+    var playable: Bool { !missing && error == nil && (isImage || duration > 0) }
+    /// Текст для подсказки у значка ⚠︎
+    var problem: String? {
+        if missing { return "The original file could not be found." }
+        if let error { return error }
+        return warnings.isEmpty ? nil : warnings.joined(separator: "\n")
+    }
 }
 
-struct LibraryScan {
-    var songs: [VideoFile] = []
-    var logo: URL?
-    var problems: [String] = []
-}
-
-/// Папка с видео: «NN_название.mp4» — песни, файл со словом «logo» в имени — логотип
 enum Library {
-    static let extensions: Set<String> = ["mp4", "mov", "m4v"]
+    static let videoExtensions: Set<String> = ["mp4", "mov", "m4v"]
+    static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "heic", "tif", "tiff"]
 
-    static func scan(folder: URL) async -> LibraryScan {
-        var result = LibraryScan()
-        let files: [URL]
-        do {
-            files = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil,
-                                                                options: [.skipsHiddenFiles])
-                .filter { extensions.contains($0.pathExtension.lowercased()) }
-                .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        } catch {
-            result.problems.append("Папка не читается: \(error.localizedDescription)")
-            return result
+    static func isMedia(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        return videoExtensions.contains(ext) || imageExtensions.contains(ext)
+    }
+
+    static func inspect(_ url: URL) async -> MediaInfo {
+        var info = MediaInfo()
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            info.missing = true
+            return info
         }
+        if imageExtensions.contains(url.pathExtension.lowercased()) {
+            info.isImage = true
+            return info
+        }
+        let asset = AVURLAsset(url: url)
+        do {
+            let duration = try await asset.load(.duration).seconds
+            let tracks = try await asset.loadTracks(withMediaType: .video)
+            guard duration.isFinite, duration > 0, let track = tracks.first else {
+                info.error = "Not a video file or the file is empty."
+                return info
+            }
+            info.duration = duration
+            info.hasAudio = !((try? await asset.loadTracks(withMediaType: .audio)) ?? []).isEmpty
+            if let size = try? await track.load(.naturalSize) { info.size = size }
+            info.warnings = await check(track, duration: duration)
+        } catch {
+            info.error = "The file can’t be opened: \(error.localizedDescription)"
+        }
+        return info
+    }
 
-        var byId: [Int: VideoFile] = [:]
+    /// Старый формат: папка «NN_название.mp4» + файл со словом «logo». Для переноса в сет.
+    static func scanLegacyFolder(_ folder: URL) -> (songs: [(number: Int, url: URL)], logo: URL?) {
+        let files = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil,
+                                                                    options: [.skipsHiddenFiles])) ?? [])
+            .filter { videoExtensions.contains($0.pathExtension.lowercased()) }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        var logo: URL?
+        var byNumber: [Int: URL] = [:]
         for url in files {
             let name = url.lastPathComponent
             if name.lowercased().contains("logo") {
-                if result.logo == nil { result.logo = url } else { result.problems.append("Второй логотип пропущен: \(name)") }
+                if logo == nil { logo = url }
                 continue
             }
-            let digits = name.prefix { $0.isNumber }
-            guard let id = Int(digits), id > 0 else {
-                result.problems.append("Нет номера в начале имени: \(name)")
-                continue
-            }
-            if let existing = byId[id] {
-                result.problems.append("Номер \(id) повторяется: \(existing.name) и \(name)")
-                continue
-            }
-            let asset = AVURLAsset(url: url)
-            do {
-                let duration = try await asset.load(.duration).seconds
-                let tracks = try await asset.loadTracks(withMediaType: .video)
-                guard duration.isFinite, duration > 0, !tracks.isEmpty else {
-                    result.problems.append("Не видео или пустой файл: \(name)")
-                    continue
-                }
-                byId[id] = VideoFile(id: id, url: url, duration: duration)
-                result.problems += await check(tracks[0], duration: duration).map { "\(name): \($0)" }
-            } catch {
-                result.problems.append("Файл не открывается: \(name) — \(error.localizedDescription)")
-            }
+            if let n = Int(name.prefix { $0.isNumber }), n > 0, byNumber[n] == nil { byNumber[n] = url }
         }
-        if let logo = result.logo, let track = try? await AVURLAsset(url: logo).loadTracks(withMediaType: .video).first {
-            let d = (try? await AVURLAsset(url: logo).load(.duration).seconds) ?? 0
-            result.problems += await check(track, duration: d).map { "\(logo.lastPathComponent): \($0)" }
-        }
-        result.songs = byId.values.sorted { $0.id < $1.id }
-        if result.logo == nil { result.problems.append("Нет файла логотипа (имя должно содержать «logo»)") }
-        return result
+        return (byNumber.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }, logo)
     }
 
     /// Предупреждения о файлах, с которыми старт с середины и подстройка будут медленными
@@ -78,13 +86,13 @@ enum Library {
             let codec = CMFormatDescriptionGetMediaSubType(format)
             let ok: Set<FourCharCode> = [fourCC("avc1"), fourCC("hvc1"), fourCC("hev1"),
                                          fourCC("apcn"), fourCC("apch"), fourCC("apcs"), fourCC("apco"), fourCC("ap4h")]
-            if !ok.contains(codec) { warnings.append("кодек \(fourCCString(codec)) — лучше H.264") }
+            if !ok.contains(codec) { warnings.append("Codec \(fourCCString(codec)) — H.264 is safer.") }
         }
         if let size = try? await track.load(.naturalSize), size.width * size.height > 3840 * 2160 {
-            warnings.append("разрешение \(Int(size.width))×\(Int(size.height)) — тяжело, лучше 1920×1080 или меньше")
+            warnings.append("\(Int(size.width))×\(Int(size.height)) is heavy — 1920×1080 or less is safer.")
         }
         if let gap = keyframeGap(track, duration: duration), gap > 2.0 {
-            warnings.append(String(format: "ключевой кадр раз в %.1f с — старт с середины песни будет медленным, лучше пережать с ключевым кадром раз в 1 с", gap))
+            warnings.append(String(format: "A keyframe only every %.1f s — starting mid-song will be slow. Re-export with a keyframe every 1 s.", gap))
         }
         return warnings
     }
