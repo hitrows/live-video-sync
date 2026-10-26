@@ -168,6 +168,7 @@ struct NowPlayingPanel: View {
                             action: show.resumeSync)
             }
             .padding(.vertical, 4)
+            .zIndex(1)
 
             // Источник — меню, как выбор выхода звука в Музыке; точка снаружи (меню рисует только текст)
             HStack(spacing: 6) {
@@ -268,6 +269,8 @@ struct ControlIcon: View {
     let help: String
     let action: () -> Void
     @State private var hovering = false
+    @State private var showTip = false
+    @State private var tipTask: Task<Void, Never>?
 
     var body: some View {
         Button(action: action) {
@@ -279,8 +282,37 @@ struct ControlIcon: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .help(help)
+        .onHover { inside in
+            hovering = inside
+            tipTask?.cancel()
+            if inside {
+                // Как системная подсказка: через полсекунды наведения
+                tipTask = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(500))
+                    if !Task.isCancelled { showTip = true }
+                }
+            } else {
+                showTip = false
+            }
+        }
+        // Своя подсказка: системную (.help) сбрасывает перерисовка панели 10 раз в секунду
+        .overlay(alignment: .top) {
+            if showTip {
+                Text(help)
+                    .font(.callout)
+                    .fixedSize()
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
+                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.separator))
+                    .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+                    .offset(y: 34)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .zIndex(showTip ? 1 : 0)
+        .animation(.easeOut(duration: 0.12), value: showTip)
         .accessibilityLabel(label)
         .accessibilityValue(isOn ? "On" : "Off")
     }
