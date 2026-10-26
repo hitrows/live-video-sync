@@ -10,6 +10,7 @@ private struct PreviewLayerView: NSViewRepresentable {
         init(mirror: PreviewMirror) {
             self.mirror = mirror
             super.init(frame: .zero)
+            mirror.host = self
             wantsLayer = true
             layer?.backgroundColor = CGColor(gray: 0, alpha: 1)
             mirror.rootLayer.removeFromSuperlayer()

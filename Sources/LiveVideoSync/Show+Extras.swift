@@ -67,6 +67,7 @@ extension Show {
 
     func setRepeat(_ mode: RepeatMode, for id: UUID) {
         editPlaylist(id) { $0.repeatMode = mode }
+        if extrasPlaylist == id { engine.extras.setRepeat(mode) }
     }
 
     func addFiles(_ urls: [URL], toPlaylist id: UUID, at index: Int? = nil) {

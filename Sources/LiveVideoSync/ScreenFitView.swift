@@ -29,7 +29,7 @@ struct ScreenFitView: View {
                 Banners(show: show)
                 controls
                 if let mirror {
-                    FitCanvas(show: show, mirror: mirror, tool: tool)
+                    FitCanvas(show: show, draft: show.fitDraft, mirror: mirror, tool: tool)
                 }
                 Text(hint)
                     .font(.caption)
@@ -37,7 +37,7 @@ struct ScreenFitView: View {
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity)
-            Inspector(show: show)
+            Inspector(show: show, draft: show.fitDraft)
                 .frame(width: 280)
         }
         .padding(20)
@@ -122,7 +122,7 @@ struct ScreenFitView: View {
             .fixedSize()
             .help("Venue presets")
             Button("Reset All") { show.settings.screenFit = ScreenFit() }
-                .disabled(show.settings.screenFit == ScreenFit())
+                .disabled(show.currentFit == ScreenFit())
         }
     }
 }
@@ -131,6 +131,7 @@ struct ScreenFitView: View {
 
 private struct FitCanvas: View {
     @ObservedObject var show: Show
+    @ObservedObject var draft: FitDraft
     let mirror: PreviewMirror
     let tool: ScreenFitView.Tool
     @State private var start: ScreenFit?
@@ -159,14 +160,14 @@ private struct FitCanvas: View {
         .focused($focused)
         .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
             let step = press.modifiers.contains(.shift) ? 10.0 : 1.0
-            var fit = show.settings.screenFit
+            var fit = show.currentFit
             switch press.key {
             case .leftArrow: fit.positionX -= step
             case .rightArrow: fit.positionX += step
             case .upArrow: fit.positionY += step
             default: fit.positionY -= step
             }
-            show.settings.screenFit = fit
+            show.dragFit(fit)
             return .handled
         }
         .onTapGesture { focused = true }
@@ -216,7 +217,7 @@ private struct FitCanvas: View {
 
     @ViewBuilder
     private func handles(k: CGFloat) -> some View {
-        let fit = show.settings.screenFit
+        let fit = show.currentFit
         let w = Double(size.width), h = Double(size.height)
         let quad = fit.quad(width: w, height: h).map { view($0, k) }
         let outline = Path { p in
@@ -242,7 +243,7 @@ private struct FitCanvas: View {
     private func moveGesture(k: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 1)
             .onChanged { g in
-                let s = start ?? show.settings.screenFit
+                let s = start ?? show.currentFit
                 if start == nil { start = s }
                 var fit = s
                 if !fit.transformOn { fit.transformOn = true }
@@ -257,10 +258,10 @@ private struct FitCanvas: View {
                     if let dx = Self.snapDelta([minX, maxX, (minX + maxX) / 2], to: [0, w, w / 2], within: t) { fit.positionX += dx }
                     if let dy = Self.snapDelta([minY, maxY, (minY + maxY) / 2], to: [0, h, h / 2], within: t) { fit.positionY += dy }
                 }
-                show.settings.screenFit = fit
+                show.dragFit(fit)
                 focused = true
             }
-            .onEnded { _ in start = nil }
+            .onEnded { _ in start = nil; show.commitFit() }
     }
 
     @ViewBuilder
@@ -299,13 +300,13 @@ private struct FitCanvas: View {
             .position(arm)
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { g in
-                    var fit = show.settings.screenFit
+                    var fit = show.currentFit
                     fit.transformOn = true
                     let dx = Double(g.location.x - center.x), dy = Double(center.y - g.location.y)
                     var deg = atan2(dy, dx) * 180 / .pi
                     if NSEvent.modifierFlags.contains(.shift) { deg = (deg / 15).rounded() * 15 }
                     fit.rotation = (deg * 10).rounded() / 10
-                    show.settings.screenFit = fit
+                    show.dragFit(fit)
                 })
     }
 
@@ -313,7 +314,7 @@ private struct FitCanvas: View {
     private func scaleGesture(sx: Double, sy: Double, k: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { g in
-                let s = start ?? show.settings.screenFit
+                let s = start ?? show.currentFit
                 if start == nil { start = s }
                 var fit = s
                 fit.transformOn = true
@@ -348,9 +349,9 @@ private struct FitCanvas: View {
                         fit[keyPath: kp] = 100
                     }
                 }
-                show.settings.screenFit = fit
+                show.dragFit(fit)
             }
-            .onEnded { _ in start = nil }
+            .onEnded { _ in start = nil; show.commitFit() }
     }
 
     // MARK: Crop
@@ -365,7 +366,7 @@ private struct FitCanvas: View {
                 .rotationEffect(.radians(-fit.effective.rotation * .pi / 180))
                 .gesture(DragGesture(minimumDistance: 0)
                     .onChanged { g in
-                        var fit = show.settings.screenFit
+                        var fit = show.currentFit
                         fit.cropOn = true
                         let w = Double(size.width), h = Double(size.height)
                         let local = fit.invertTransform(canvas(g.location, k), width: w, height: h)
@@ -380,7 +381,7 @@ private struct FitCanvas: View {
                             for kp in [\ScreenFit.cropLeft, \ScreenFit.cropRight, \ScreenFit.cropTop, \ScreenFit.cropBottom]
                             where fit[keyPath: kp] < t { fit[keyPath: kp] = 0 }
                         }
-                        show.settings.screenFit = fit
+                        show.dragFit(fit)
                     })
         }
     }
@@ -394,7 +395,7 @@ private struct FitCanvas: View {
                 .position(quad[i])
                 .gesture(DragGesture(minimumDistance: 0)
                     .onChanged { g in
-                        let s = start ?? show.settings.screenFit
+                        let s = start ?? show.currentFit
                         if start == nil { start = s }
                         var fit = s
                         fit.distortOn = true
@@ -420,9 +421,9 @@ private struct FitCanvas: View {
                             default: nudge(&fit.topLeft)
                             }
                         }
-                        show.settings.screenFit = fit
+                        show.dragFit(fit)
                     }
-                    .onEnded { _ in start = nil })
+                    .onEnded { _ in start = nil; show.commitFit() })
         }
     }
 }
@@ -469,6 +470,7 @@ private struct MirrorView: NSViewRepresentable {
         init(mirror: PreviewMirror) {
             self.mirror = mirror
             super.init(frame: .zero)
+            mirror.host = self
             wantsLayer = true
             layer?.backgroundColor = CGColor(gray: 0, alpha: 1)
             layer?.addSublayer(mirror.rootLayer)
@@ -497,6 +499,16 @@ private struct MirrorView: NSViewRepresentable {
 
 private struct Inspector: View {
     @ObservedObject var show: Show
+    @ObservedObject var draft: FitDraft
+
+    /// Поле инспектора: показывает то, что видно сейчас, правка идёт как перетаскивание
+    private func fit<T>(_ key: WritableKeyPath<ScreenFit, T>) -> Binding<T> {
+        Binding(get: { show.currentFit[keyPath: key] }, set: { value in
+            var f = show.currentFit
+            f[keyPath: key] = value
+            show.dragFit(f)
+        })
+    }
 
     private var w: Double { Double(show.engine.rootLayer.bounds.width) }
     private var h: Double { Double(show.engine.rootLayer.bounds.height) }
@@ -504,25 +516,25 @@ private struct Inspector: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                group("Transform", on: $show.settings.screenFit.transformOn, reset: { show.settings.screenFit.resetTransform() }) {
-                    pairRow("Position", $show.settings.screenFit.positionX, $show.settings.screenFit.positionY, unit: "px")
-                    numberRow("Rotation", $show.settings.screenFit.rotation, unit: "°")
-                    sliderRow("Scale (All)", $show.settings.screenFit.scale, range: 1...400, unit: "%")
-                    sliderRow("Scale X", $show.settings.screenFit.scaleX, range: 1...400, unit: "%")
-                    sliderRow("Scale Y", $show.settings.screenFit.scaleY, range: 1...400, unit: "%")
-                    pairRow("Anchor", $show.settings.screenFit.anchorX, $show.settings.screenFit.anchorY, unit: "px")
+                group("Transform", on: fit(\.transformOn), reset: { show.commitFit(); show.settings.screenFit.resetTransform() }) {
+                    pairRow("Position", fit(\.positionX), fit(\.positionY), unit: "px")
+                    numberRow("Rotation", fit(\.rotation), unit: "°")
+                    sliderRow("Scale (All)", fit(\.scale), range: 1...400, unit: "%")
+                    sliderRow("Scale X", fit(\.scaleX), range: 1...400, unit: "%")
+                    sliderRow("Scale Y", fit(\.scaleY), range: 1...400, unit: "%")
+                    pairRow("Anchor", fit(\.anchorX), fit(\.anchorY), unit: "px")
                 }
-                group("Crop", on: $show.settings.screenFit.cropOn, reset: { show.settings.screenFit.resetCrop() }) {
-                    sliderRow("Left", $show.settings.screenFit.cropLeft, range: 0...max(1, w / 2), unit: "px")
-                    sliderRow("Right", $show.settings.screenFit.cropRight, range: 0...max(1, w / 2), unit: "px")
-                    sliderRow("Top", $show.settings.screenFit.cropTop, range: 0...max(1, h / 2), unit: "px")
-                    sliderRow("Bottom", $show.settings.screenFit.cropBottom, range: 0...max(1, h / 2), unit: "px")
+                group("Crop", on: fit(\.cropOn), reset: { show.commitFit(); show.settings.screenFit.resetCrop() }) {
+                    sliderRow("Left", fit(\.cropLeft), range: 0...max(1, w / 2), unit: "px")
+                    sliderRow("Right", fit(\.cropRight), range: 0...max(1, w / 2), unit: "px")
+                    sliderRow("Top", fit(\.cropTop), range: 0...max(1, h / 2), unit: "px")
+                    sliderRow("Bottom", fit(\.cropBottom), range: 0...max(1, h / 2), unit: "px")
                 }
-                group("Distort", on: $show.settings.screenFit.distortOn, reset: { show.settings.screenFit.resetDistort() }) {
-                    pairRow("Top Left", $show.settings.screenFit.topLeft.x, $show.settings.screenFit.topLeft.y)
-                    pairRow("Top Right", $show.settings.screenFit.topRight.x, $show.settings.screenFit.topRight.y)
-                    pairRow("Bottom Left", $show.settings.screenFit.bottomLeft.x, $show.settings.screenFit.bottomLeft.y)
-                    pairRow("Bottom Right", $show.settings.screenFit.bottomRight.x, $show.settings.screenFit.bottomRight.y)
+                group("Distort", on: fit(\.distortOn), reset: { show.commitFit(); show.settings.screenFit.resetDistort() }) {
+                    pairRow("Top Left", fit(\.topLeft.x), fit(\.topLeft.y))
+                    pairRow("Top Right", fit(\.topRight.x), fit(\.topRight.y))
+                    pairRow("Bottom Left", fit(\.bottomLeft.x), fit(\.bottomLeft.y))
+                    pairRow("Bottom Right", fit(\.bottomRight.x), fit(\.bottomRight.y))
                 }
             }
         }

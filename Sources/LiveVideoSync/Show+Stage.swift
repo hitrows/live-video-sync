@@ -159,6 +159,33 @@ extension Show {
 
     // MARK: - Screen Fit
 
+    /// Подгонка, которую видно сейчас (с учётом перетаскивания)
+    var currentFit: ScreenFit { fitDraft.fit ?? settings.screenFit }
+
+    /// Мышь двигает подгонку: сразу на экран сцены, в настройки — через 0,3 с покоя или по отпусканию
+    func dragFit(_ fit: ScreenFit) {
+        fitDraft.fit = fit
+        engine.fit = fit
+        fitCommit?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.commitFit() }
+        fitCommit = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
+    }
+
+    func commitFit() {
+        fitCommit?.cancel()
+        fitCommit = nil
+        guard let fit = fitDraft.fit else { return }
+        fitDraft.fit = nil
+        settings.screenFit = fit
+    }
+
+    func dropFitDraft() {
+        fitCommit?.cancel()
+        fitCommit = nil
+        if fitDraft.fit != nil { fitDraft.fit = nil }
+    }
+
     var venuePresetName: String? {
         settings.venuePresets.first { $0.id == settings.venuePreset }?.name
     }

@@ -39,6 +39,12 @@ final class ExtrasPlayer {
     private var switching = false
     /// Номер запуска: отложенная пауза старого слоя не должна задеть новый запуск
     private var generation = 0
+    /// Файлы, которые не открылись (диск отключили, файл удалили), — пропускаем
+    private var broken: Set<Int> = []
+    /// С какого момента ждём, пока следующий файл будет готов (держим последний кадр текущего)
+    private var waitingSince: Double?
+    /// Дольше не ждём: файл, видимо, не откроется
+    private let readyTimeout = 5.0
 
     init() {
         container.opacity = 0
@@ -65,6 +71,8 @@ final class ExtrasPlayer {
         isPlaying = true
         preparedIndex = nil
         switching = false
+        broken = []
+        waitingSince = nil
         for slot in slots { slot.player.pause() }
         current = 0
         load(slot: 0, index: index)
@@ -87,23 +95,39 @@ final class ExtrasPlayer {
         Log.info("Extras: остановлены")
     }
 
-    /// Положение текущего видео (для Now Playing)
-    var position: Double {
-        currentSlot.isImage ? 0 : max(0, currentSlot.player.currentTime().seconds)
+    /// Repeat поменяли, пока плейлист играет — сразу действует
+    func setRepeat(_ r: RepeatMode) {
+        guard isPlaying, case .playlist = mode else { return }
+        mode = .playlist(r)
+        Log.info("Extras: повтор \(r.title)")
+    }
+
+    /// Картинки плейлиста сменяются по времени (в Repeat One и одиночном показе висят бесконечно)
+    private var imagesAdvance: Bool { mode == .playlist(.off) || mode == .playlist(.all) }
+
+    /// Положение текущего файла (для Now Playing)
+    func position(at now: Double) -> Double {
+        currentSlot.isImage ? max(0, now - shownAt) : max(0, currentSlot.player.currentTime().seconds)
     }
 
     var duration: Double {
-        currentSlot.isImage ? 0 : currentSlot.videoDuration
+        currentSlot.isImage ? (imagesAdvance ? imageDuration : 0) : currentSlot.videoDuration
     }
 
     func tick(now: Double) {
         guard isPlaying, let entry = currentEntry else { return }
         let slot = currentSlot
+        if slot.failed, !broken.contains(index) {
+            broken.insert(index)
+            Log.info("Extras: файл не открывается — пропускаю \(entry.url.lastPathComponent)")
+        }
         // Видео ещё не началось (не было готово) — запустить, как только готово
-        if !entry.isImage, !slot.started { slot.playFromStart() }
+        if !entry.isImage, !slot.started, !slot.failed { slot.playFromStart() }
 
         let finished: Bool
-        if entry.isImage {
+        if slot.failed {
+            finished = true
+        } else if entry.isImage {
             switch mode {
             case .single, .playlist(.one): finished = false
             case .playlist: finished = now - shownAt >= imageDuration
@@ -116,28 +140,56 @@ final class ExtrasPlayer {
             load(slot: 1 - current, index: next)
             preparedIndex = next
         }
+        // Подготовленный файл не открылся — пропустить, на следующем тике подготовится другой
+        if let p = preparedIndex, !switching, slots[1 - current].failed {
+            broken.insert(p)
+            preparedIndex = nil
+            Log.info("Extras: файл не открывается — пропускаю \(entries[p].url.lastPathComponent)")
+        }
 
         guard finished, !switching else { return }
-        if mode == .playlist(.one) || (mode == .playlist(.all) && entries.count == 1) {
+        if !slot.failed, mode == .playlist(.one) || (mode == .playlist(.all) && entries.count == 1) {
             // По кругу один файл — с начала, без перехода
             slot.playFromStart()
             shownAt = now
             return
         }
-        guard let next = nextIndex(), preparedIndex == next else {
+        guard let next = nextIndex() else {
             Log.info("Extras: доиграли")
             onFinished()
             return
         }
+        guard preparedIndex == next else { return }
+        // Следующий ещё без кадра — держим последний кадр текущего, а не уходим в пустоту
+        if !slots[1 - current].isReady {
+            let since = waitingSince ?? now
+            waitingSince = since
+            guard now - since >= readyTimeout else { return }
+            Log.info("Extras: \(entries[next].url.lastPathComponent) не готов за \(Int(readyTimeout)) с — пропускаю")
+            broken.insert(next)
+            preparedIndex = nil
+            waitingSince = nil
+            return
+        }
+        waitingSince = nil
         switchTo(next, now: now)
     }
 
+    /// Следующий файл, пропуская неоткрывшиеся
     private func nextIndex() -> Int? {
-        switch mode {
-        case .single, .playlist(.one): return nil
-        case .playlist(.off): return index + 1 < entries.count ? index + 1 : nil
-        case .playlist(.all): return entries.isEmpty ? nil : (index + 1) % entries.count
+        var i = index
+        for _ in 0..<entries.count {
+            switch mode {
+            case .single, .playlist(.one): return nil
+            case .playlist(.off):
+                guard i + 1 < entries.count else { return nil }
+                i += 1
+            case .playlist(.all):
+                i = (i + 1) % entries.count
+            }
+            if !broken.contains(i) { return i }
         }
+        return nil
     }
 
     private func switchTo(_ next: Int, now: Double) {

@@ -85,6 +85,12 @@ final class Playhead: ObservableObject {
     }
 }
 
+/// Screen Fit, пока его тянут мышью: двигается только картинка и холст, а настройки
+/// (и с ними всё окно) меняются один раз — когда движение закончилось
+final class FitDraft: ObservableObject {
+    @Published var fit: ScreenFit?
+}
+
 /// Вывод на экран сцены
 enum OutputState: Equatable {
     case off
@@ -103,6 +109,8 @@ final class Show: ObservableObject {
     @Published private(set) var media: [String: MediaInfo] = [:]
     @Published private(set) var nowPlaying = NowPlaying()
     let playhead = Playhead()
+    let fitDraft = FitDraft()
+    var fitCommit: DispatchWorkItem?
     /// Что вернуть на экране сцены при выходе — свой файл, пишется сразу
     var stage = StageState() {
         didSet { if stage != oldValue { Store.saveStage(stage) } }
@@ -367,7 +375,7 @@ final class Show: ObservableObject {
         engine.fadeIn = d
         engine.crossfade = settings.transition == .crossfade
         engine.scale = settings.scale
-        engine.fit = settings.screenFit
+        engine.fit = currentFit
         midi.onlyNetwork = settings.acceptOnlyLogic
         OutputView.hidePointer = settings.hidePointer
         director.fadeOut = d
@@ -388,6 +396,8 @@ final class Show: ObservableObject {
                 }
             }
         }
+        // Подгонку поменяли не мышью (Reset, пресет) — незаписанное перетаскивание уже не нужно
+        if settings.screenFit != old.screenFit { dropFitDraft() }
         // Правки подгонки сразу сохраняются в выбранный пресет площадки
         if settings.screenFit != old.screenFit, let id = settings.venuePreset,
            let i = settings.venuePresets.firstIndex(where: { $0.id == id }), settings.venuePresets[i].fit != settings.screenFit {
@@ -447,7 +457,7 @@ final class Show: ObservableObject {
 
     func updateStatus(_ out: ShowOutput, now: Double) {
         syncManualState()
-        updateNowPlaying(out)
+        updateNowPlaying(out, now: now)
         updateLogic(now: now)
 
         let state: OutputState
@@ -466,7 +476,7 @@ final class Show: ObservableObject {
         }
     }
 
-    func updateNowPlaying(_ out: ShowOutput) {
+    func updateNowPlaying(_ out: ShowOutput, now: Double) {
         var n = NowPlaying()
         var position: Double?
         var playPosition: Double?
@@ -481,11 +491,13 @@ final class Show: ObservableObject {
             n.mode = .extras
             n.number = x.index + 1
             if extrasItems.indices.contains(x.index) {
-                n.itemID = extrasItems[x.index].id
-                n.title = extrasItems[x.index].displayName
+                let item = extrasItems[x.index]
+                n.itemID = item.id
+                // Имя — из плейлиста: файл могли переименовать, пока он играет
+                n.title = playlist(extrasPlaylist)?.items.first { $0.id == item.id }?.displayName ?? item.displayName
             }
             n.isImage = x.currentSlot.isImage
-            position = x.position
+            position = x.position(at: now)
             n.duration = x.duration
             let name = playlist(extrasPlaylist)?.name ?? "Extras"
             switch x.mode {

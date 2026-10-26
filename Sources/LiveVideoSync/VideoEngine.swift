@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import QuartzCore
 
@@ -24,6 +25,8 @@ final class SongSlot {
     private var imageFailed = false
     /// Защита от устаревшей фоновой распаковки (слот успели перезагрузить)
     private var loadToken = 0
+    /// Размер кадра, когда он стал известен: рамку считаем 60 раз в секунду, а плеер спрашиваем один раз
+    private var knownSize: CGSize?
 
     init() {
         player.isMuted = true
@@ -47,11 +50,14 @@ final class SongSlot {
 
     /// Размер картинки или кадра видео (для рамки на экране)
     var contentSize: CGSize? {
-        if let image { return CGSize(width: image.width, height: image.height) }
-        return player.currentItem?.presentationSize
+        if let knownSize { return knownSize }
+        let size = image.map { CGSize(width: $0.width, height: $0.height) } ?? player.currentItem?.presentationSize
+        if let size, size.width > 0, size.height > 0 { knownSize = size }
+        return size
     }
 
     func load(id: Int, url: URL, start: Double = 0) {
+        knownSize = nil
         cueId = id
         self.url = url
         startOffset = start
@@ -175,6 +181,7 @@ final class SongSlot {
 
     func unload() {
         player.replaceCurrentItem(with: nil)
+        knownSize = nil
         cueId = nil
         url = nil
         loadToken += 1
@@ -211,6 +218,7 @@ final class LogoPlayer {
     let imageLayer = CALayer()
     private(set) var image: CGImage?
     private var imageFailed = false
+    private var knownSize: CGSize?
 
     init() {
         player.isMuted = true
@@ -225,6 +233,7 @@ final class LogoPlayer {
     func load(_ url: URL?) {
         guard url != self.url else { return }
         self.url = url
+        knownSize = nil
         looper?.disableLooping()
         looper = nil
         player.removeAllItems()
@@ -247,10 +256,12 @@ final class LogoPlayer {
         Log.info("Логотип: \(url.lastPathComponent)")
     }
 
-    /// Размер картинки или кадра (для рамки на экране)
+    /// Размер картинки или кадра (для рамки на экране); плеер спрашиваем, пока размер не известен
     var contentSize: CGSize? {
-        if let image { return CGSize(width: image.width, height: image.height) }
-        return player.currentItem?.presentationSize
+        if let knownSize { return knownSize }
+        let size = image.map { CGSize(width: $0.width, height: $0.height) } ?? player.currentItem?.presentationSize
+        if let size, size.width > 0, size.height > 0 { knownSize = size }
+        return size
     }
 
     func setFrame(_ frame: CGRect) {
@@ -619,6 +630,8 @@ final class PreviewMirror {
     private let testPattern = CALayer()
     private let engine: VideoEngine
     private let pairs: [Pair]
+    /// Вид, в котором висит превью: окно закрыто, свёрнуто или закрыто другими — не копируем впустую
+    weak var host: NSView?
 
     init(engine: VideoEngine) {
         self.engine = engine
@@ -665,6 +678,7 @@ final class PreviewMirror {
     }
 
     func sync() {
+        guard let window = host?.window, window.occlusionState.contains(.visible) else { return }
         let src = engine.rootLayer.bounds
         let dst = rootLayer.bounds
         guard src.width > 0, src.height > 0, dst.width > 0 else { return }

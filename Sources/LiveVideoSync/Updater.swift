@@ -202,6 +202,13 @@ final class Updater: ObservableObject {
         Task {
             do {
                 let app = try await download(release)
+                // Пока качали, могли нажать Go Live — шоу не прерываем, поставим в другой раз
+                guard !Show.shared.settings.live else {
+                    Log.info("Обновления: пока качали, включили эфир — установка отложена")
+                    state = .available(release)
+                    hideProgress()
+                    return
+                }
                 state = .installing
                 try relaunch(replacingWith: app)
             } catch {
