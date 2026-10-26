@@ -41,6 +41,8 @@ struct InlineRename: View {
     let commit: (String) -> Void
     @State private var draft = ""
     @FocusState private var editing: Bool
+    /// Фокус уже был — только тогда его потеря значит «готово»
+    @State private var hadFocus = false
 
     var body: some View {
         if renaming == id {
@@ -50,11 +52,15 @@ struct InlineRename: View {
                 .frame(maxWidth: 360)
                 .onAppear {
                     draft = name
-                    editing = true
+                    hadFocus = false
+                    // Сразу фокус не встаёт: его ещё держит список (Return) или закрывающееся меню (Rename)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { editing = true }
                 }
                 .onSubmit(finish)
                 .onExitCommand { renaming = nil }
-                .onChange(of: editing) { _, focused in if !focused { finish() } }
+                .onChange(of: editing) { _, focused in
+                    if focused { hadFocus = true } else if hadFocus { finish() }
+                }
         } else {
             Text(name)
                 .lineLimit(1)
