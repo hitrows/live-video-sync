@@ -4,7 +4,11 @@ import SwiftUI
 /// Окно «?»: вся настройка и решение проблем — чтобы справиться без разработчика.
 /// Названия кнопок и меню — по-английски, как на экране (система на английском).
 struct HelpView: View {
+    /// Раздел, на который открыть (например, решение проблем по кнопке «?» у строки Source)
+    var anchor: HelpWindow.Topic?
+
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 Text("Live Video Sync — инструкция").font(.largeTitle.weight(.bold))
@@ -13,7 +17,7 @@ struct HelpView: View {
 
                 section("Как это работает") {
                     bullet("Сет-лист собирается в программе: **File** → **New Setlist**, перетащи видео в список. Файлы могут лежать где угодно. Порядок — перетаскиванием.")
-                    bullet("Номер песни = её место в сет-листе, и от него — нота-метка: песня 1 — C1, 2 — C#1, 3 — D1 … (нота видна в колонке справа). Переставил песню — передвинь её ноту в Logic.")
+                    bullet("У каждой песни своя нота-метка (колонка справа). Новая песня получает следующую свободную ноту: C1, C#1, D1 … Сменить — **•••** → **Marker Note**; если нота занята, песни поменяются нотами. Переставлять песни в списке можно свободно — ноты остаются за песнями, в Logic ничего двигать не нужно. Пропущенные на концерте песни ничему не мешают.")
                     bullet("В Logic на отдельной MIDI-дорожке в начале каждой песни стоит короткая нота-метка. Плеер сам запоминает, где в проекте начинается каждая песня — для этого один раз прогони каждую песню с её начала. Выученная нота-метка яркая, невыученная — бледная.")
                     bullet("Играет **активный** сет (метка **Active**). Открыть другой сет можно, не меняя шоу; **Make Active** — переключить шоу на него.")
                     bullet("Стоп или автостоп в Logic — на экране логотип. Пропала связь посреди песни — видео доиграет само, потом логотип.")
@@ -61,7 +65,7 @@ struct HelpView: View {
                     bullet("В сет-листе нет значков ⚠︎, все ноты-метки яркие (выучены).")
                 }
 
-                section("Если что-то не работает") {
+                section("Если что-то не работает", id: .troubleshooting) {
                     problem("«Source: … connection lost» или «Waiting for timecode»",
                             "• Оба Mac в одной сети Wi-Fi?\n• **Settings** → **Sync** → **Source Mac** выбран? Можно нажать **Reconnect Now** в баннере. Или на Mac с Logic: **MIDI Link** → **Connect**.\n• В **Audio MIDI Setup** → **Network** у сеанса стоит галочка (на обоих Mac)?\n• На роутере должна быть выключена изоляция клиентов (**AP isolation / Client isolation**).\n• Программа сама пробует подключиться каждые 2 с — по имени и по запомненному IP.")
                     problem("Баннер «This Mac has no network MIDI session»",
@@ -71,7 +75,7 @@ struct HelpView: View {
                     problem("Logic играет, а на экране логотип",
                             "• Нота-метка песни бледная (не выучена) — прогони песню с начала.\n• Нота не та — сверь с нотой в сет-листе.\n• Активен другой сет — нажми **Make Active** на нужном.\n• Дорожка меток идёт не в **Session 1** или выключена (Mute).\n• Видео короче песни — после конца видео всегда логотип, это нормально.")
                     problem("Показывает не ту песню",
-                            "Нота-метка в Logic не соответствует месту песни в сет-листе. Поправь ноту, прогони песню с начала — метка перезапишется. Или **•••** → **Reset Marker**.")
+                            "Нота-метка в Logic не совпадает с нотой песни в сет-листе. Поправь ноту в Logic (или **•••** → **Marker Note** в программе), прогони песню с начала — метка перезапишется. Или **•••** → **Reset Marker**.")
                     problem("Стоп в Logic, а видео продолжает играть",
                             "Включи **Transmit MMC** (**Project Settings** → **Synchronization** → **MIDI**), назначение **Session 1**. Без него стоп выглядит как обрыв связи, и видео доигрывает до конца.")
                     problem("Видео дёргается или долго стартует с середины",
@@ -114,6 +118,10 @@ struct HelpView: View {
             .frame(maxWidth: 760, alignment: .leading)
         }
         .frame(minWidth: 640, minHeight: 600)
+        .onAppear {
+            if let anchor { DispatchQueue.main.async { proxy.scrollTo(anchor, anchor: .top) } }
+        }
+        }
     }
 
     /// Markdown (**жирный**) с сохранением переносов строк
@@ -122,11 +130,13 @@ struct HelpView: View {
         return Text((try? AttributedString(markdown: text, options: options)) ?? AttributedString(text))
     }
 
-    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    private func section<Content: View>(_ title: String, id: HelpWindow.Topic? = nil,
+                                        @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title).font(.title2.weight(.semibold))
             content()
         }
+        .id(id)
     }
 
     private func bullet(_ text: String) -> some View {
@@ -158,16 +168,19 @@ struct HelpView: View {
 enum HelpWindow {
     private static var window: NSWindow?
 
-    static func show() {
+    enum Topic: Hashable { case troubleshooting }
+
+    static func show(_ topic: Topic? = nil) {
         if window == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 780, height: 760),
                              styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             w.title = "Live Video Sync Help"
             w.isReleasedWhenClosed = false
-            w.contentView = NSHostingView(rootView: HelpView())
             w.center()
             window = w
         }
+        // Новый вид — чтобы прокрутить к нужному разделу
+        window?.contentView = NSHostingView(rootView: HelpView(anchor: topic))
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }

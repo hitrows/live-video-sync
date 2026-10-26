@@ -186,6 +186,12 @@ struct NowPlayingPanel: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             .help("Choose the Mac that sends timecode")
+            // Связь не в порядке — стандартная кнопка «?» сразу на решение проблем
+            if show.logic.state != .connected {
+                HelpLink { HelpWindow.show(.troubleshooting) }
+                    .controlSize(.mini)
+                    .help("What to check when there is no timecode")
+            }
             }
             .padding(.top, 4)
         }
