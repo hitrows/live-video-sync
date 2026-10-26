@@ -84,7 +84,7 @@ private struct PlaylistItems: View {
                     .foregroundStyle(.secondary)
                 Text("Drag videos and images here")
                     .font(.title3.weight(.semibold))
-                Text("Band logos, ads, intros. Videos play with sound.")
+                Text("Band logos and ads. Videos play with sound.")
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
