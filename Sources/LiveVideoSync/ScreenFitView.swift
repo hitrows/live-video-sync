@@ -74,7 +74,7 @@ struct ScreenFitView: View {
 
     private var hint: String {
         switch tool {
-        case .transform: return "Drag the video to move · corners to scale (Shift keeps proportions) · handle on the arm to rotate · ← → ↑ ↓ 1 px, Shift 10 px"
+        case .transform: return "Drag the video to move · corners to scale (Shift keeps proportions) · handle on the arm to rotate · ← → ↑ ↓ 1 px, Shift 10 px · edges snap, hold ⌘ to turn it off"
         case .crop: return "Drag the edges to cut off what the venue screen can’t show"
         case .distort: return "Drag the corners to fit a projector that hits the screen at an angle"
         }
@@ -172,6 +172,23 @@ private struct FitCanvas: View {
         .onTapGesture { focused = true }
     }
 
+    /// Лёгкое примагничивание; ⌘ — без него (как в Keynote)
+    private var snapping: Bool { !NSEvent.modifierFlags.contains(.command) }
+
+    /// 8 точек на экране — в пикселях холста
+    private func snapDistance(_ k: CGFloat) -> Double { Double(8 / max(k, 0.01)) }
+
+    /// Насколько сдвинуть, чтобы ближайшая из точек легла на ближайшую цель (nil — далеко)
+    static func snapDelta(_ points: [Double], to targets: [Double], within t: Double) -> Double? {
+        var best: Double?
+        for p in points {
+            for target in targets where abs(target - p) <= t {
+                if best == nil || abs(target - p) < abs(best!) { best = target - p }
+            }
+        }
+        return best
+    }
+
     /// Холст (Y вверх) → вид (Y вниз)
     private func view(_ p: (x: Double, y: Double), _ k: CGFloat) -> CGPoint {
         CGPoint(x: p.x * k, y: (size.height - p.y) * k)
@@ -231,6 +248,15 @@ private struct FitCanvas: View {
                 if !fit.transformOn { fit.transformOn = true }
                 fit.positionX = (s.positionX + Double(g.translation.width / k)).rounded()
                 fit.positionY = (s.positionY - Double(g.translation.height / k)).rounded()
+                if snapping {
+                    // Края картинки — к краям экрана, центр — к центру
+                    let w = Double(size.width), h = Double(size.height), t = snapDistance(k)
+                    let q = fit.quad(width: w, height: h)
+                    let xs = q.map(\.x), ys = q.map(\.y)
+                    let (minX, maxX, minY, maxY) = (xs.min()!, xs.max()!, ys.min()!, ys.max()!)
+                    if let dx = Self.snapDelta([minX, maxX, (minX + maxX) / 2], to: [0, w, w / 2], within: t) { fit.positionX += dx }
+                    if let dy = Self.snapDelta([minY, maxY, (minY + maxY) / 2], to: [0, h, h / 2], within: t) { fit.positionY += dy }
+                }
                 show.settings.screenFit = fit
                 focused = true
             }
@@ -316,6 +342,12 @@ private struct FitCanvas: View {
                 }
                 fit.scaleX = (newX * 10).rounded() / 10
                 fit.scaleY = (newY * 10).rounded() / 10
+                if snapping {
+                    // Масштаб липнет к 100 %
+                    for kp in [\ScreenFit.scale, \ScreenFit.scaleX, \ScreenFit.scaleY] where abs(fit[keyPath: kp] - 100) < 2 {
+                        fit[keyPath: kp] = 100
+                    }
+                }
                 show.settings.screenFit = fit
             }
             .onEnded { _ in start = nil }
@@ -343,6 +375,11 @@ private struct FitCanvas: View {
                         case 2: fit.cropTop = min(max(0, h - local.y), h - fit.cropBottom - 10).rounded()
                         default: fit.cropLeft = min(max(0, local.x), w - fit.cropRight - 10).rounded()
                         }
+                        if snapping {
+                            let t = snapDistance(k)
+                            for kp in [\ScreenFit.cropLeft, \ScreenFit.cropRight, \ScreenFit.cropTop, \ScreenFit.cropBottom]
+                            where fit[keyPath: kp] < t { fit[keyPath: kp] = 0 }
+                        }
                         show.settings.screenFit = fit
                     })
         }
@@ -368,6 +405,20 @@ private struct FitCanvas: View {
                         case 1: fit.bottomRight = moved(s.bottomRight)
                         case 2: fit.topRight = moved(s.topRight)
                         default: fit.topLeft = moved(s.topLeft)
+                        }
+                        if snapping {
+                            // Угол липнет к краям и углам экрана
+                            let w = Double(size.width), h = Double(size.height), t = snapDistance(k)
+                            let corner = fit.quad(width: w, height: h)[i]
+                            let sx = Self.snapDelta([corner.x], to: [0, w], within: t) ?? 0
+                            let sy = Self.snapDelta([corner.y], to: [0, h], within: t) ?? 0
+                            func nudge(_ c: inout ScreenFit.Corner) { c.x += sx; c.y += sy }
+                            switch i {
+                            case 0: nudge(&fit.bottomLeft)
+                            case 1: nudge(&fit.bottomRight)
+                            case 2: nudge(&fit.topRight)
+                            default: nudge(&fit.topLeft)
+                            }
                         }
                         show.settings.screenFit = fit
                     }

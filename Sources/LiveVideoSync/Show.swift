@@ -19,11 +19,7 @@ struct NowPlaying: Equatable {
     var itemID: UUID?
     var number: Int?
     var title = ""
-    var position = 0.0
     var duration = 0.0
-    /// Когда позиция была position — между обновлениями полоска досчитывает сама (плавно)
-    var positionDate = Date.distantPast
-    var drift: Int?
     /// Extras: «Band Logos · Repeat All»
     var extrasSource: String?
     var isImage = false
@@ -45,7 +41,6 @@ struct LogicStatus: Equatable {
     }
     var state: State = .waiting
     var macName: String?
-    var timecode: String?
     var fps: String?
     var mtcRunning = false
     /// Выбранный источник сейчас виден в сети
@@ -60,10 +55,32 @@ struct LogicStatus: Equatable {
             return "Source: \(macName) · " + (visible ? "connecting…" : "not on the network")
         case .lost: return "Source: \(macName ?? "source Mac") · connection lost"
         case .connected:
-            var parts = ["Source: \(macName ?? "connected")", "connected"]
-            if let timecode { parts.append(timecode) }
-            if let fps { parts.append(fps) }
-            return parts.joined(separator: " · ")
+            return "Source: \(macName ?? "connected") · connected"
+        }
+    }
+}
+
+/// Быстро меняющееся — позиция песни, расхождение, таймкод. Отдельный объект: за ним следят только
+/// полоска, время и строка таймкода, а остальное окно перерисовывается лишь при смене песни, режима, связи.
+final class Playhead: ObservableObject {
+    struct Anchor: Equatable {
+        var position = 0.0
+        var date = Date.distantPast
+    }
+    /// Позиция в момент date; между обновлениями виды досчитывают сами (скорость 1)
+    @Published private(set) var anchor = Anchor()
+    @Published var drift: Int?
+    @Published var timecode: String?
+
+    func position(at date: Date) -> Double {
+        anchor.position + date.timeIntervalSince(anchor.date)
+    }
+
+    /// Обновить, только если досчитанная позиция разошлась с настоящей (смена песни, перемотка, подстройка)
+    func follow(_ position: Double, restart: Bool) {
+        let now = Date()
+        if restart || abs(self.position(at: now) - position) > 0.25 {
+            anchor = Anchor(position: position, date: now)
         }
     }
 }
@@ -85,6 +102,7 @@ final class Show: ObservableObject {
     /// Что известно о файлах: путь → сведения
     @Published private(set) var media: [String: MediaInfo] = [:]
     @Published private(set) var nowPlaying = NowPlaying()
+    let playhead = Playhead()
     @Published private(set) var logic = LogicStatus()
     @Published private(set) var outputState: OutputState = .off
     @Published private(set) var manualBlack = false
@@ -914,6 +932,9 @@ final class Show: ObservableObject {
 
     private func updateNowPlaying(_ out: ShowOutput) {
         var n = NowPlaying()
+        var position: Double?
+        var playPosition: Double?
+        var drift: Int?
         switch out {
         case .black:
             n.mode = .black
@@ -928,7 +949,7 @@ final class Show: ObservableObject {
                 n.title = extrasItems[x.index].displayName
             }
             n.isImage = x.currentSlot.isImage
-            n.position = x.position
+            position = x.position
             n.duration = x.duration
             let name = playlist(extrasPlaylist)?.name ?? "Extras"
             switch x.mode {
@@ -938,23 +959,23 @@ final class Show: ObservableObject {
         case .song(let id, let position, let locked):
             n.mode = director.manualPlay != nil ? .manual : locked ? .locked : .free
             n.number = id
-            n.position = position
+            playPosition = position
             if let item = activeItem(id) {
                 n.itemID = item.id
                 n.title = item.displayName
                 n.duration = duration(item) ?? 0
             }
-            n.drift = engine.activeSlot?.drift.map { Int(($0 * 1000).rounded()) }
+            drift = engine.activeSlot?.drift.map { Int(($0 * 1000).rounded()) }
         }
         if out != .extras, let next = director.nextCue(after: out), let item = activeItem(next) {
             n.next = String(format: "%02d", next) + " " + item.displayName
                 + " · marker " + Self.noteName(note(item, in: settings.active))
         }
-        n.positionDate = Date()
-        // Сравниваем без времени снимка — иначе обновлялось бы каждый раз
-        var cmp = nowPlaying
-        cmp.positionDate = n.positionDate
-        if n != cmp || abs(n.position - nowPlaying.position) > 0.5 { nowPlaying = n }
+        let restart = n.itemID != nowPlaying.itemID || n.mode != nowPlaying.mode
+        if n != nowPlaying { nowPlaying = n }
+        playhead.follow(position ?? playPosition ?? 0, restart: restart)
+        // Расхождение — 2 раза в секунду, чаще читать незачем
+        if ticks % 30 == 0, playhead.drift != drift { playhead.drift = drift }
         let playing = out == .extras ? extrasPlaylist.flatMap { p in n.itemID.map { (p, $0) } } : nil
         if playing?.0 != extrasNow?.playlist || playing?.1 != extrasNow?.item { extrasNow = playing }
     }
@@ -976,13 +997,15 @@ final class Show: ObservableObject {
         s.visible = s.macName.map(link.isVisible) ?? false
 
         let clock = director.clock
+        var timecode: String?
         if let pos = clock.position(at: now) {
             s.mtcRunning = true
-            s.timecode = Timecode(realSeconds: pos, rate: clock.rate).text
             s.fps = "\(clock.rate.label) fps"
+            timecode = Timecode(realSeconds: pos, rate: clock.rate).text
         } else if let pos = director.lastKnownPosition {
-            s.timecode = Timecode(realSeconds: pos, rate: clock.rate).text
+            timecode = Timecode(realSeconds: pos, rate: clock.rate).text
         }
+        if playhead.timecode != timecode { playhead.timecode = timecode }
 
         if connected {
             everConnected = true

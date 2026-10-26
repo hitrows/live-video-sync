@@ -74,7 +74,7 @@ struct PreviewPanel: View {
     private var timeLabel: some View {
         let n = show.nowPlaying
         if n.number != nil, n.duration > 0, n.duration.isFinite {
-            Text("\(Show.clock(n.position)) / \(Show.clock(n.duration))")
+            PlayheadClock(playhead: show.playhead, duration: n.duration)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.white)
                 .padding(.horizontal, 7)
@@ -123,31 +123,16 @@ struct NowPlayingPanel: View {
             Text(title(n))
                 .font(.title2.weight(.semibold))
                 .lineLimit(1)
-            StatusLine(color: modeColor(n), text: modeText(n))
+            HStack(spacing: 6) {
+                Circle().fill(modeColor(n)).frame(width: 8, height: 8)
+                Text(modeText(n)).lineLimit(1)
+                if n.mode == .locked { DriftText(playhead: show.playhead) }
+            }
+            .foregroundStyle(.secondary)
 
             if n.number != nil, n.duration > 0, n.duration.isFinite {
-                // Плавно: позицию досчитываем на каждом кадре экрана от последнего обновления
-                TimelineView(.animation) { context in
-                    let p = min(n.duration, max(0, n.position + context.date.timeIntervalSince(n.positionDate)))
-                    VStack(alignment: .leading, spacing: 6) {
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                Capsule().fill(.quaternary)
-                                Capsule().fill(Color.accentColor)
-                                    .frame(width: max(4, geo.size.width * p / n.duration))
-                            }
-                        }
-                        .frame(height: 6)
-                        HStack {
-                            Text(Show.minutes(p))
-                            Spacer()
-                            Text("−" + Show.minutes(n.duration - p))
-                        }
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    }
-                }
-                .frame(maxWidth: 280)
+                ProgressBar(playhead: show.playhead, duration: n.duration)
+                    .frame(maxWidth: 280)
             }
             if let next = n.next {
                 Text("Next: \(next)")
@@ -168,7 +153,6 @@ struct NowPlayingPanel: View {
                             action: show.resumeSync)
             }
             .padding(.vertical, 4)
-            .zIndex(1)
 
             // Источник — меню, как выбор выхода звука в Музыке; точка снаружи (меню рисует только текст)
             HStack(spacing: 6) {
@@ -196,7 +180,8 @@ struct NowPlayingPanel: View {
                 Divider()
                 SettingsLink { Text("Sync Settings…") }
             } label: {
-                Text(show.logic.line)
+                SourceLabel(line: show.logic.line, connected: show.logic.state == .connected, fps: show.logic.fps,
+                            playhead: show.playhead)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
@@ -218,7 +203,7 @@ struct NowPlayingPanel: View {
     private func modeText(_ n: NowPlaying) -> String {
         switch n.mode {
         case .locked:
-            return "Locked to MTC" + (n.drift.map { String(format: " · drift %+d ms", $0) } ?? "")
+            return "Locked to MTC"
         case .free: return "Playing on its own — no timecode from the source"
         case .manual: return "Manual — plays to the end, then the logo"
         case .extras:
@@ -269,8 +254,6 @@ struct ControlIcon: View {
     let help: String
     let action: () -> Void
     @State private var hovering = false
-    @State private var showTip = false
-    @State private var tipTask: Task<Void, Never>?
 
     var body: some View {
         Button(action: action) {
@@ -282,38 +265,78 @@ struct ControlIcon: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { inside in
-            hovering = inside
-            tipTask?.cancel()
-            if inside {
-                // Как системная подсказка: через полсекунды наведения
-                tipTask = Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(500))
-                    if !Task.isCancelled { showTip = true }
-                }
-            } else {
-                showTip = false
-            }
-        }
-        // Своя подсказка: системную (.help) сбрасывает перерисовка панели 10 раз в секунду
-        .overlay(alignment: .top) {
-            if showTip {
-                Text(help)
-                    .font(.callout)
-                    .fixedSize()
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
-                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.separator))
-                    .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
-                    .offset(y: 34)
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
-            }
-        }
-        .zIndex(showTip ? 1 : 0)
-        .animation(.easeOut(duration: 0.12), value: showTip)
+        .onHover { hovering = $0 }
+        .help(help)
         .accessibilityLabel(label)
         .accessibilityValue(isOn ? "On" : "Off")
+    }
+}
+
+// MARK: - Быстрые части: следят только за Playhead, остальное окно не перерисовывают
+
+/// Полоска и время песни: досчитывают позицию на каждом кадре экрана — плавно
+struct ProgressBar: View {
+    @ObservedObject var playhead: Playhead
+    let duration: Double
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let p = min(duration, max(0, playhead.position(at: context.date)))
+            VStack(alignment: .leading, spacing: 6) {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(.quaternary)
+                        Capsule().fill(Color.accentColor)
+                            .frame(width: max(4, geo.size.width * p / duration))
+                    }
+                }
+                .frame(height: 6)
+                HStack {
+                    Text(Show.minutes(p))
+                    Spacer()
+                    Text("−" + Show.minutes(duration - p))
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// «02:14.6 / 04:05.0» на превью — 10 раз в секунду хватает
+struct PlayheadClock: View {
+    @ObservedObject var playhead: Playhead
+    let duration: Double
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.1)) { context in
+            let p = min(duration, max(0, playhead.position(at: context.date)))
+            Text("\(Show.clock(p)) / \(Show.clock(duration))")
+        }
+    }
+}
+
+struct DriftText: View {
+    @ObservedObject var playhead: Playhead
+
+    var body: some View {
+        if let drift = playhead.drift {
+            Text(String(format: "· drift %+d ms", drift)).monospacedDigit()
+        }
+    }
+}
+
+/// «Source: MacBook · connected · 01:07:32:14 · 24 fps»
+struct SourceLabel: View {
+    let line: String
+    let connected: Bool
+    let fps: String?
+    @ObservedObject var playhead: Playhead
+
+    var body: some View {
+        var parts = [line]
+        if connected, let tc = playhead.timecode { parts.append(tc) }
+        if connected, let fps { parts.append(fps) }
+        return Text(parts.joined(separator: " · ")).monospacedDigit()
     }
 }
