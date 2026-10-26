@@ -193,10 +193,9 @@ struct Settings: Codable, Equatable {
     var venuePreset: UUID?
     /// Разрешение экрана сцены для каждого экрана (ключ — производитель-модель-серийник); нет — Default
     var resolutions: [String: DisplayModeRef] = [:]
-    /// Каким был режим экрана до программы — вернуть при выходе
-    var originalModes: [String: DisplayModeRef] = [:]
-    /// Обои экрана сцены до программы — вернуть при выходе
-    var previousWallpapers: [String: String] = [:]
+    // Старое место состояния экрана сцены (теперь stage.json) — только чтение для переноса
+    var legacyOriginalModes: [String: DisplayModeRef] = [:]
+    var legacyPreviousWallpapers: [String: String] = [:]
     /// MIDI только из сетевого сеанса с Logic; выкл — ещё и USB-устройства этого Mac
     var acceptOnlyLogic = true
 
@@ -210,7 +209,8 @@ struct Settings: Codable, Equatable {
         case setlists, activeSetlist, logoPath, display, transition, transitionDuration, scale, markerBaseNote
         case live, logicMac, hideDock, hidePointer, restartScreen, restartImagePath, extrasImageDuration
         case playlists, extrasAudioDevice, extrasVolume, screenFit, venuePresets, venuePreset
-        case resolutions, originalModes, previousWallpapers, acceptOnlyLogic, testWindow
+        case resolutions, legacyOriginalModes = "originalModes", legacyPreviousWallpapers = "previousWallpapers"
+        case acceptOnlyLogic, testWindow
         case legacyFolderPath = "folderPath", legacyMarkers = "markers"
         case crossfade, fadeOut
     }
@@ -239,8 +239,8 @@ struct Settings: Codable, Equatable {
         venuePresets = (try? c.decodeIfPresent([VenuePreset].self, forKey: .venuePresets)) ?? []
         venuePreset = try? c.decodeIfPresent(UUID.self, forKey: .venuePreset)
         resolutions = (try? c.decodeIfPresent([String: DisplayModeRef].self, forKey: .resolutions)) ?? [:]
-        originalModes = (try? c.decodeIfPresent([String: DisplayModeRef].self, forKey: .originalModes)) ?? [:]
-        previousWallpapers = (try? c.decodeIfPresent([String: String].self, forKey: .previousWallpapers)) ?? [:]
+        legacyOriginalModes = (try? c.decodeIfPresent([String: DisplayModeRef].self, forKey: .legacyOriginalModes)) ?? [:]
+        legacyPreviousWallpapers = (try? c.decodeIfPresent([String: String].self, forKey: .legacyPreviousWallpapers)) ?? [:]
         acceptOnlyLogic = (try? c.decodeIfPresent(Bool.self, forKey: .acceptOnlyLogic)) ?? true
         testWindow = (try? c.decodeIfPresent(Bool.self, forKey: .testWindow)) ?? false
         // Старый выбор «Window (test)» в списке экранов → кнопка тестового окна
@@ -284,8 +284,6 @@ struct Settings: Codable, Equatable {
         try c.encode(venuePresets, forKey: .venuePresets)
         try c.encodeIfPresent(venuePreset, forKey: .venuePreset)
         try c.encode(resolutions, forKey: .resolutions)
-        try c.encode(originalModes, forKey: .originalModes)
-        try c.encode(previousWallpapers, forKey: .previousWallpapers)
         try c.encode(acceptOnlyLogic, forKey: .acceptOnlyLogic)
         try c.encode(testWindow, forKey: .testWindow)
         try c.encodeIfPresent(legacyFolderPath, forKey: .legacyFolderPath)
@@ -293,6 +291,14 @@ struct Settings: Codable, Equatable {
     }
 
     var active: Setlist? { setlists.first { $0.id == activeSetlist } }
+}
+
+/// Что программа поменяла на экране сцены и должна вернуть при штатном выходе
+struct StageState: Codable, Equatable {
+    /// Режим экрана до программы (ключ — производитель-модель-серийник)
+    var originalModes: [String: DisplayModeRef] = [:]
+    /// Обои до программы
+    var previousWallpapers: [String: String] = [:]
 }
 
 /// Файлы программы в ~/Library/Application Support/LiveVideoSync/
@@ -310,6 +316,22 @@ enum Store {
     /// Обновляется каждую секунду с главного потока — сторож видит зависание
     static let heartbeatURL = dir.appendingPathComponent("heartbeat")
     static let restartsURL = dir.appendingPathComponent("restarts")
+
+    /// Состояние экрана сцены, которое надо вернуть при выходе (не настройки — пишется сразу, переживает сбой)
+    static let stageURL = dir.appendingPathComponent("stage.json")
+
+    static func loadStage() -> StageState {
+        guard let data = try? Data(contentsOf: stageURL),
+              let state = try? JSONDecoder().decode(StageState.self, from: data) else { return StageState() }
+        return state
+    }
+
+    static func saveStage(_ state: StageState) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(state) else { return }
+        try? data.write(to: stageURL, options: .atomic)
+    }
 
     /// Чёрная картинка для обоев экрана сцены (Settings → Output → While the Player Restarts → Black)
     static let blackImageURL: URL? = {

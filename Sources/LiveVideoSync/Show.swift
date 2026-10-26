@@ -103,6 +103,10 @@ final class Show: ObservableObject {
     @Published private(set) var media: [String: MediaInfo] = [:]
     @Published private(set) var nowPlaying = NowPlaying()
     let playhead = Playhead()
+    /// Что вернуть на экране сцены при выходе — свой файл, пишется сразу
+    var stage = StageState() {
+        didSet { if stage != oldValue { Store.saveStage(stage) } }
+    }
     @Published private(set) var logic = LogicStatus()
     @Published private(set) var outputState: OutputState = .off
     @Published private(set) var manualBlack = false
@@ -127,16 +131,35 @@ final class Show: ObservableObject {
     private(set) lazy var output = OutputController(engine: engine)
     private(set) lazy var preview = PreviewMirror(engine: engine)
 
-    private var timer: Timer?
-    private var ticks = 0
-    private var sleepAssertion: IOPMAssertionID = 0
+    var timer: Timer?
+    var ticks = 0
+    var sleepAssertion: IOPMAssertionID = 0
     /// Когда пропала связь с Logic Mac (для баннера — не показывать короткие перебои)
-    private var linkDownSince: Date?
-    private var lastTitleState: OutputState?
-    private var everConnected = false
+    var linkDownSince: Date?
+    var lastTitleState: OutputState?
+    var everConnected = false
+
+    /// Какой режим уже пробовали поставить на подключённый экран. Одна попытка на подключение:
+    /// если экран принял режим чуть иначе (59.94 вместо 60 Гц), иначе ставили бы его по кругу — проектор мигал бы
+    var modeAttempts: [String: DisplayModeRef] = [:]
+    /// Пока открыто «Keep this resolution?» — сохранённый режим сам не ставим, иначе он перебьёт пробный
+    var resolutionTrialKey: String?
+
+    /// Что сейчас играет в Extras (для подсветки строки и Now Playing)
+    @Published private(set) var extrasNow: (playlist: UUID, item: UUID)?
+    var extrasItems: [PlaylistItem] = []
+    var extrasPlaylist: UUID?
 
     private init() {
         settings = Store.loadSettings()
+        stage = Store.loadStage()
+        // Перенос из старого места (settings.json)
+        if !settings.legacyOriginalModes.isEmpty || !settings.legacyPreviousWallpapers.isEmpty {
+            stage.originalModes.merge(settings.legacyOriginalModes) { a, _ in a }
+            stage.previousWallpapers.merge(settings.legacyPreviousWallpapers) { a, _ in a }
+            settings.legacyOriginalModes = [:]
+            settings.legacyPreviousWallpapers = [:]
+        }
     }
 
     func start() {
@@ -214,346 +237,6 @@ final class Show: ObservableObject {
         syncManualState()
     }
 
-    // MARK: - Экран сцены: разрешение и обои на время перезапуска
-
-    /// Экран сцены, если подключён (для Settings → Output)
-    var stageScreen: NSScreen? {
-        settings.testWindow ? nil : OutputController.targetScreen(for: settings.display)
-    }
-
-    /// Куда вывод: экран сцены или тестовое окно
-    private var outputChoice: DisplayChoice { settings.testWindow ? .window : settings.display }
-
-    /// «A200 HDMI · 1280 × 800 px» — экран и размер вывода в пикселях
-    private var testPatternTitle: String {
-        let size = engine.rootLayer.bounds.size
-        let scale = settings.testWindow ? (NSScreen.main?.backingScaleFactor ?? 1) : (stageScreen?.backingScaleFactor ?? 1)
-        let name: String
-        switch outputState {
-        case .live(let display): name = settings.testWindow ? "Test window" : display
-        default: name = settings.testWindow ? "Test window" : expectedDisplayName
-        }
-        engine.pixelScale = scale
-        return "\(name) · \(Int(size.width * scale)) × \(Int(size.height * scale)) px"
-    }
-
-    func toggleTestWindow() {
-        settings.testWindow.toggle()
-        Log.info(settings.testWindow ? "Вывод в тестовое окно" : "Вывод на экран сцены")
-    }
-
-    // MARK: - Ноты-метки
-
-    /// Нота-метка песни
-    func note(_ item: SetlistItem, in setlist: Setlist? = nil) -> Int {
-        if let n = item.note { return n }
-        let list = setlist ?? settings.setlists.first { $0.items.contains { $0.id == item.id } }
-        let index = list?.items.firstIndex { $0.id == item.id } ?? 0
-        return settings.markerBaseNote + index
-    }
-
-    /// Следующая свободная нота в сете (после самой высокой)
-    private func nextFreeNote(in setlist: Setlist) -> Int {
-        let used = setlist.items.compactMap(\.note)
-        return min(127, (used.max().map { $0 + 1 }) ?? settings.markerBaseNote)
-    }
-
-    /// Песням без ноты — ноты по порядку (старые настройки: нота = место в списке)
-    private func assignMissingNotes() {
-        for s in settings.setlists.indices where settings.setlists[s].items.contains(where: { $0.note == nil }) {
-            for i in settings.setlists[s].items.indices where settings.setlists[s].items[i].note == nil {
-                settings.setlists[s].items[i].note = settings.markerBaseNote + i
-            }
-        }
-    }
-
-    /// Сменить ноту песни; если она занята другой песней сета — поменяться с ней
-    func setNote(_ note: Int, for itemID: UUID, in setlistID: UUID) {
-        edit(setlistID) { s in
-            guard let i = s.items.firstIndex(where: { $0.id == itemID }) else { return }
-            let old = s.items[i].note
-            if let j = s.items.firstIndex(where: { $0.note == note && $0.id != itemID }) { s.items[j].note = old }
-            s.items[i].note = note
-        }
-        Log.info("Нота-метка: \(Self.noteName(note))")
-    }
-
-    func stageKey(_ screen: NSScreen) -> String {
-        DisplayModes.displayKey(OutputController.ref(for: screen))
-    }
-
-    /// Какой режим уже пробовали поставить на подключённый экран. Одна попытка на подключение:
-    /// если экран принял режим чуть иначе (59.94 вместо 60 Гц), иначе ставили бы его по кругу — проектор мигал бы
-    private var modeAttempts: [String: DisplayModeRef] = [:]
-    /// Пока открыто «Keep this resolution?» — сохранённый режим сам не ставим, иначе он перебьёт пробный
-    private var resolutionTrialKey: String?
-
-    private func stageScreenFound(_ screen: NSScreen) {
-        let key = stageKey(screen)
-        let id = OutputController.displayID(screen)
-        if let wanted = settings.resolutions[key], resolutionTrialKey != key, modeAttempts[key] != wanted {
-            modeAttempts[key] = wanted
-            if settings.originalModes[key] == nil, let current = DisplayModes.current(id), current != wanted {
-                settings.originalModes[key] = current
-            }
-            DisplayModes.set(wanted, on: id)
-        }
-        if settings.live { setRestartWallpaper(on: screen) }
-    }
-
-    /// Пробный режим из Settings: ставится сразу, сохраняется только после Keep
-    func tryResolution(_ wanted: DisplayModeRef?, on screen: NSScreen) -> DisplayModeRef? {
-        let key = stageKey(screen)
-        let id = OutputController.displayID(screen)
-        let before = DisplayModes.current(id)
-        resolutionTrialKey = key
-        if let wanted {
-            if settings.originalModes[key] == nil, let before { settings.originalModes[key] = before }
-            DisplayModes.set(wanted, on: id)
-        } else if let original = settings.originalModes[key] {
-            DisplayModes.set(original, on: id)
-        }
-        return before
-    }
-
-    func keepResolution(_ wanted: DisplayModeRef?, on screen: NSScreen) {
-        let key = stageKey(screen)
-        resolutionTrialKey = nil
-        modeAttempts[key] = wanted
-        settings.resolutions[key] = wanted
-        if wanted == nil { settings.originalModes[key] = nil }
-        Log.info("Разрешение экрана сцены: \(wanted?.title ?? "Default") — сохранено")
-    }
-
-    func revertResolution(to mode: DisplayModeRef?, on screen: NSScreen) {
-        resolutionTrialKey = nil
-        modeAttempts[stageKey(screen)] = nil
-        guard let mode else { return }
-        DisplayModes.set(mode, on: OutputController.displayID(screen))
-        Log.info("Разрешение экрана сцены возвращено: \(mode.title)")
-    }
-
-    /// Картинка (или чёрное) обоями экрана сцены: если программа упадёт, пока она перезапускается — видно это, а не рабочий стол
-    private func setRestartWallpaper(on screen: NSScreen) {
-        guard let url = restartImageURL else { return }
-        let key = stageKey(screen)
-        let current = NSWorkspace.shared.desktopImageURL(for: screen)
-        guard current?.standardizedFileURL != url.standardizedFileURL else { return }
-        if settings.previousWallpapers[key] == nil, let current { settings.previousWallpapers[key] = current.path }
-        do {
-            try NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: [
-                .imageScaling: NSImageScaling.scaleProportionallyUpOrDown.rawValue,
-                .allowClipping: true,
-                .fillColor: NSColor.black,
-            ])
-            Log.info("Обои экрана сцены: \(url.lastPathComponent)")
-        } catch {
-            Log.info("Не удалось поставить обои экрана сцены: \(error.localizedDescription)")
-        }
-    }
-
-    private var restartImageURL: URL? {
-        if settings.restartScreen == .image, let path = settings.restartImagePath, FileManager.default.fileExists(atPath: path) {
-            return URL(fileURLWithPath: path)
-        }
-        return Store.blackImageURL
-    }
-
-    func chooseRestartImage() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image]
-        panel.prompt = "Use Image"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        settings.restartImagePath = url.path
-        settings.restartScreen = .image
-        if let screen = stageScreen, settings.live { setRestartWallpaper(on: screen) }
-    }
-
-    /// Штатный выход: вернуть экран сцены и сразу записать настройки
-    func prepareToQuit() {
-        restoreStageScreen()
-        Store.flush(settings)
-    }
-
-    /// Штатный выход: вернуть прежние разрешение и обои экрана сцены
-    func restoreStageScreen() {
-        for screen in NSScreen.screens {
-            let key = stageKey(screen)
-            if let original = settings.originalModes[key] {
-                DisplayModes.set(original, on: OutputController.displayID(screen))
-                settings.originalModes[key] = nil
-            }
-            if let path = settings.previousWallpapers[key] {
-                try? NSWorkspace.shared.setDesktopImageURL(URL(fileURLWithPath: path), for: screen, options: [:])
-                settings.previousWallpapers[key] = nil
-                Log.info("Обои экрана «\(screen.localizedName)» возвращены")
-            }
-        }
-    }
-
-    /// Dock переезжает на экран, где курсор упёрся в нижний край. Спрятать Dock только на одном экране macOS не даёт,
-    /// поэтому во время вывода курсор на экран сцены не пускаем — и Dock туда не попадёт. Основной экран не трогаем.
-    private func keepPointerOffStage() {
-        guard settings.live, !settings.testWindow, let stage = output.currentScreen else { return }
-        let mouse = NSEvent.mouseLocation
-        guard stage.frame.contains(mouse),
-              let other = NSScreen.screens.filter({ $0 != stage }).min(by: { distance($0.frame, mouse) < distance($1.frame, mouse) }),
-              let primary = NSScreen.screens.first else { return }
-        // Ближайшая точка соседнего экрана, на 2 pt внутрь
-        let f = other.frame.insetBy(dx: 2, dy: 2)
-        let p = CGPoint(x: min(max(mouse.x, f.minX), f.maxX), y: min(max(mouse.y, f.minY), f.maxY))
-        CGWarpMouseCursorPosition(CGPoint(x: p.x, y: primary.frame.height - p.y))
-    }
-
-    private func distance(_ r: CGRect, _ p: CGPoint) -> CGFloat {
-        let dx = max(r.minX - p.x, 0, p.x - r.maxX), dy = max(r.minY - p.y, 0, p.y - r.maxY)
-        return dx * dx + dy * dy
-    }
-
-    // MARK: - Screen Fit
-
-    var venuePresetName: String? {
-        settings.venuePresets.first { $0.id == settings.venuePreset }?.name
-    }
-
-    func choosePreset(_ id: UUID) {
-        guard let preset = settings.venuePresets.first(where: { $0.id == id }) else { return }
-        settings.venuePreset = id
-        settings.screenFit = preset.fit
-        Log.info("Screen Fit: пресет «\(preset.name)»")
-    }
-
-    func savePreset(named name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        let preset = VenuePreset(name: trimmed, fit: settings.screenFit)
-        settings.venuePresets.append(preset)
-        settings.venuePreset = preset.id
-        Log.info("Screen Fit: сохранён пресет «\(trimmed)»")
-    }
-
-    func renamePreset(_ id: UUID, to name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, let i = settings.venuePresets.firstIndex(where: { $0.id == id }) else { return }
-        settings.venuePresets[i].name = trimmed
-    }
-
-    func deletePreset(_ id: UUID) {
-        settings.venuePresets.removeAll { $0.id == id }
-        if settings.venuePreset == id { settings.venuePreset = nil }
-    }
-
-    // MARK: - Extras
-
-    /// Что сейчас играет в Extras (для подсветки строки и Now Playing)
-    @Published private(set) var extrasNow: (playlist: UUID, item: UUID)?
-    private var extrasItems: [PlaylistItem] = []
-    private var extrasPlaylist: UUID?
-
-    /// ▶ Play в шапке плейлиста — по порядку, с повтором плейлиста
-    func playPlaylist(_ id: UUID, from itemID: UUID? = nil) {
-        guard let playlist = playlist(id) else { return }
-        let items = playlist.items.filter { media[$0.path]?.playable ?? false }
-        guard !items.isEmpty else { return }
-        let start = itemID.flatMap { i in items.firstIndex { $0.id == i } } ?? 0
-        startExtras(items, playlist: id, from: start, mode: .playlist(playlist.repeatMode))
-        Log.info("Extras: плейлист «\(playlist.name)» с \(start + 1)-го, повтор \(playlist.repeatMode.title)")
-    }
-
-    /// ▶ у строки — один файл: видео до конца, потом логотип; картинка — бесконечно
-    func playExtra(_ item: PlaylistItem, in playlistID: UUID) {
-        guard media[item.path]?.playable ?? false else { return }
-        startExtras([item], playlist: playlistID, from: 0, mode: .single)
-    }
-
-    private func startExtras(_ items: [PlaylistItem], playlist: UUID, from index: Int, mode: ExtrasPlayer.Mode) {
-        let entries = items.map { ExtrasPlayer.Entry(url: $0.url, isImage: media[$0.path]?.isImage ?? false) }
-        extrasItems = items
-        extrasPlaylist = playlist
-        let now = HostTime.now
-        engine.extras.play(entries, from: index, mode: mode, now: now)
-        director.startExtras(at: now)
-        syncManualState()
-    }
-
-    func playlist(_ id: UUID?) -> Playlist? {
-        settings.playlists.first { $0.id == id }
-    }
-
-    private func editPlaylist(_ id: UUID, _ body: (inout Playlist) -> Void) {
-        guard let i = settings.playlists.firstIndex(where: { $0.id == id }) else { return }
-        body(&settings.playlists[i])
-    }
-
-    @discardableResult
-    func newPlaylist() -> UUID {
-        var title = "Untitled Playlist"
-        var n = 2
-        while settings.playlists.contains(where: { $0.name == title }) {
-            title = "Untitled Playlist \(n)"
-            n += 1
-        }
-        let playlist = Playlist(name: title)
-        settings.playlists.append(playlist)
-        Log.info("Новый плейлист Extras: \(title)")
-        return playlist.id
-    }
-
-    func renamePlaylist(_ id: UUID, to name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        editPlaylist(id) { $0.name = trimmed }
-    }
-
-    func deletePlaylist(_ id: UUID) {
-        if extrasPlaylist == id { director.stopManual(); engine.extras.stop() }
-        settings.playlists.removeAll { $0.id == id }
-    }
-
-    func setRepeat(_ mode: RepeatMode, for id: UUID) {
-        editPlaylist(id) { $0.repeatMode = mode }
-    }
-
-    func addFiles(_ urls: [URL], toPlaylist id: UUID, at index: Int? = nil) {
-        let files = urls.flatMap(expandFolder).filter(Library.isMedia)
-        guard !files.isEmpty else { return }
-        editPlaylist(id) { p in
-            let at = min(max(0, index ?? p.items.count), p.items.count)
-            p.items.insert(contentsOf: files.map { PlaylistItem(path: $0.path) }, at: at)
-        }
-        inspectMedia()
-    }
-
-    func removePlaylistItems(_ ids: Set<UUID>, from id: UUID) {
-        editPlaylist(id) { $0.items.removeAll { ids.contains($0.id) } }
-    }
-
-    func movePlaylistItems(in id: UUID, from offsets: IndexSet, to destination: Int) {
-        editPlaylist(id) { $0.items.move(fromOffsets: offsets, toOffset: destination) }
-    }
-
-    func renamePlaylistItem(_ itemID: UUID, in id: UUID, to title: String) {
-        let trimmed = title.trimmingCharacters(in: .whitespaces)
-        editPlaylist(id) { p in
-            guard let i = p.items.firstIndex(where: { $0.id == itemID }) else { return }
-            p.items[i].title = trimmed.isEmpty ? nil : trimmed
-        }
-    }
-
-    func replacePlaylistFile(_ itemID: UUID, in id: UUID) {
-        guard let item = playlist(id)?.items.first(where: { $0.id == itemID }) else { return }
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.movie, .image]
-        panel.prompt = "Choose"
-        panel.directoryURL = item.url.deletingLastPathComponent()
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        editPlaylist(id) { p in
-            guard let i = p.items.firstIndex(where: { $0.id == itemID }) else { return }
-            p.items[i].path = url.path
-        }
-        inspectMedia()
-    }
-
     /// Аварийный ручной запуск песни активного сета: до конца, потом логотип
     func playManually(_ item: SetlistItem) {
         guard let index = settings.active?.items.firstIndex(where: { $0.id == item.id }) else { return }
@@ -562,7 +245,7 @@ final class Show: ObservableObject {
         syncManualState()
     }
 
-    private func syncManualState() {
+    func syncManualState() {
         if manualBlack != director.manualBlack { manualBlack = director.manualBlack }
         if manualLogo != director.manualLogo { manualLogo = director.manualLogo }
         if isManual != director.isManual { isManual = director.isManual }
@@ -589,7 +272,7 @@ final class Show: ObservableObject {
         link.disconnectAll()
     }
 
-    private func updateLinkChoices() {
+    func updateLinkChoices() {
         var list = link.peers.map { LinkTarget(name: $0.name, address: $0.address, ip: $0.ip) }
         if let saved = settings.logicMac {
             if let found = list.first(where: { $0.name == saved.name }) {
@@ -610,191 +293,10 @@ final class Show: ObservableObject {
         if list != linkChoices { linkChoices = list }
     }
 
-    // MARK: - Сеты
-
-    func setlist(_ id: UUID?) -> Setlist? {
-        settings.setlists.first { $0.id == id }
-    }
-
-    /// Песня активного сета по номеру (1…)
-    func activeItem(_ number: Int) -> SetlistItem? {
-        guard let items = settings.active?.items, number >= 1, number <= items.count else { return nil }
-        return items[number - 1]
-    }
-
-    private func edit(_ id: UUID, _ body: (inout Setlist) -> Void) {
-        guard let i = settings.setlists.firstIndex(where: { $0.id == id }) else { return }
-        body(&settings.setlists[i])
-    }
-
-    @discardableResult
-    func newSetlist(name: String? = nil) -> UUID {
-        let base = name ?? "Untitled Setlist"
-        var title = base
-        var n = 2
-        while settings.setlists.contains(where: { $0.name == title }) {
-            title = "\(base) \(n)"
-            n += 1
-        }
-        let setlist = Setlist(name: title)
-        settings.setlists.append(setlist)
-        // Первый сет сразу активный — играть больше нечему
-        if settings.activeSetlist == nil { settings.activeSetlist = setlist.id }
-        Log.info("Новый сет: \(title)")
-        return setlist.id
-    }
-
-    func renameSetlist(_ id: UUID, to name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        edit(id) { $0.name = trimmed }
-    }
-
-    func deleteSetlist(_ id: UUID) {
-        guard let s = setlist(id) else { return }
-        settings.setlists.removeAll { $0.id == id }
-        if settings.activeSetlist == id { settings.activeSetlist = nil }
-        Log.info("Сет удалён: \(s.name)")
-    }
-
-    func makeActive(_ id: UUID) {
-        guard let s = setlist(id) else { return }
-        settings.activeSetlist = id
-        Log.info("Активный сет: \(s.name)")
-    }
-
-    /// Добавить файлы в сет (перетаскивание или Add Files…); index — куда вставить
-    func addFiles(_ urls: [URL], to id: UUID, at index: Int? = nil) {
-        let files = urls.flatMap(expandFolder).filter(Library.isMedia)
-        guard !files.isEmpty else { return }
-        guard let current = setlist(id) else { return }
-        var next = nextFreeNote(in: current)
-        let items: [SetlistItem] = files.map { url in
-            var item = SetlistItem(path: url.path)
-            item.note = next
-            next = min(127, next + 1)
-            return item
-        }
-        edit(id) { s in
-            let at = min(max(0, index ?? s.items.count), s.items.count)
-            s.items.insert(contentsOf: items, at: at)
-        }
-        inspectMedia()
-        Log.info("В сет добавлено файлов: \(files.count)")
-    }
-
-    /// Папку — её видео и картинки по имени
-    private func expandFolder(_ url: URL) -> [URL] {
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else { return [url] }
-        return ((try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? [])
-            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
-    }
-
-    func removeItems(_ ids: Set<UUID>, from setlistID: UUID) {
-        edit(setlistID) { $0.items.removeAll { ids.contains($0.id) } }
-    }
-
-    func moveItems(in setlistID: UUID, from offsets: IndexSet, to destination: Int) {
-        edit(setlistID) { $0.items.move(fromOffsets: offsets, toOffset: destination) }
-    }
-
-    /// Move to Position: песня встаёт на позицию (1…), остальные сдвигаются
-    func moveItem(_ itemID: UUID, in setlistID: UUID, toPosition position: Int) {
-        edit(setlistID) { s in
-            guard let from = s.items.firstIndex(where: { $0.id == itemID }) else { return }
-            let item = s.items.remove(at: from)
-            s.items.insert(item, at: min(max(0, position - 1), s.items.count))
-        }
-    }
-
-    func renameItem(_ itemID: UUID, in setlistID: UUID, to title: String) {
-        let trimmed = title.trimmingCharacters(in: .whitespaces)
-        edit(setlistID) { s in
-            guard let i = s.items.firstIndex(where: { $0.id == itemID }) else { return }
-            s.items[i].title = trimmed.isEmpty ? nil : trimmed
-        }
-    }
-
-    func setTrim(_ itemID: UUID, in setlistID: UUID, start: Double, end: Double?) {
-        edit(setlistID) { s in
-            guard let i = s.items.firstIndex(where: { $0.id == itemID }) else { return }
-            s.items[i].trimStart = max(0, start)
-            s.items[i].trimEnd = end
-        }
-    }
-
-    func resetMarker(_ itemID: UUID, in setlistID: UUID) {
-        edit(setlistID) { s in
-            guard let i = s.items.firstIndex(where: { $0.id == itemID }) else { return }
-            s.items[i].marker = nil
-        }
-        Log.info("Метка сброшена")
-    }
-
-    func resetMarkers(in setlistID: UUID) {
-        edit(setlistID) { s in
-            for i in s.items.indices { s.items[i].marker = nil }
-        }
-        Log.info("Метки сета сброшены")
-    }
-
-    /// Replace File… и Locate… — выбрать другой файл для песни, метка и имя остаются
-    func replaceFile(_ itemID: UUID, in setlistID: UUID) {
-        guard let item = setlist(setlistID)?.items.first(where: { $0.id == itemID }) else { return }
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.movie, .image]
-        panel.prompt = "Choose"
-        panel.message = "Choose the file for “\(item.displayName)”"
-        panel.directoryURL = item.url.deletingLastPathComponent()
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        edit(setlistID) { s in
-            guard let i = s.items.firstIndex(where: { $0.id == itemID }) else { return }
-            // Имя в списке сохраняем — его видит музыкант, а не имя файла
-            if s.items[i].title == nil { s.items[i].title = item.displayName }
-            s.items[i].path = url.path
-            s.items[i].trimStart = 0
-            s.items[i].trimEnd = nil
-        }
-        inspectMedia()
-        Log.info("Файл песни заменён: \(url.lastPathComponent)")
-    }
-
-    func showInFinder(_ item: SetlistItem) {
-        NSWorkspace.shared.activateFileViewerSelecting([item.url])
-    }
-
-    func info(_ item: SetlistItem) -> MediaInfo? { media[item.path] }
-
-    /// Длительность песни с учётом обрезки
-    func duration(_ item: SetlistItem) -> Double? {
-        guard let info = media[item.path], info.playable, !info.isImage else { return nil }
-        let end = min(item.trimEnd ?? info.duration, info.duration)
-        return max(0.1, end - item.trimStart)
-    }
-
-    func totalDuration(_ setlist: Setlist) -> Double {
-        setlist.items.compactMap(duration).reduce(0, +)
-    }
-
-    /// Set as Logo — из правого щелчка у файла Extras
-    func setLogo(_ path: String) {
-        settings.logoPath = path
-        Log.info("Логотип: \(URL(fileURLWithPath: path).lastPathComponent)")
-    }
-
-    func chooseLogo() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.movie, .image]
-        panel.prompt = "Use as Logo"
-        if let path = settings.logoPath { panel.directoryURL = URL(fileURLWithPath: path).deletingLastPathComponent() }
-        if panel.runModal() == .OK, let url = panel.url { settings.logoPath = url.path }
-    }
-
     // MARK: - Внутреннее
 
     /// Старый формат (одна папка с номерами) → сет с тем же порядком и выученными метками
-    private func migrateLegacyFolder() {
+    func migrateLegacyFolder() {
         guard settings.setlists.isEmpty, let path = settings.legacyFolderPath else { return }
         let folder = URL(fileURLWithPath: path)
         let scan = Library.scanLegacyFolder(folder)
@@ -815,7 +317,7 @@ final class Show: ObservableObject {
     }
 
     /// Проверить файлы, о которых ещё ничего не известно (и пропавшие — вдруг появились)
-    private func inspectMedia() {
+    func inspectMedia() {
         var paths = Set(settings.setlists.flatMap { $0.items.map(\.path) })
         paths.formUnion(settings.playlists.flatMap { $0.items.map(\.path) })
         if let logo = settings.logoPath { paths.insert(logo) }
@@ -834,7 +336,7 @@ final class Show: ObservableObject {
         }
     }
 
-    private func rebuildCues() {
+    func rebuildCues() {
         let items = settings.active?.items ?? []
         var cues: [Int: CueInfo] = [:]
         for (i, item) in items.enumerated() {
@@ -851,7 +353,7 @@ final class Show: ObservableObject {
         if map != director.noteMap { director.noteMap = map }
     }
 
-    private func learned(_ id: Int, at position: Double) {
+    func learned(_ id: Int, at position: Double) {
         guard let active = settings.activeSetlist, let item = activeItem(id) else { return }
         edit(active) { s in
             if let i = s.items.firstIndex(where: { $0.id == item.id }) { s.items[i].marker = position }
@@ -859,7 +361,7 @@ final class Show: ObservableObject {
         Log.info("Метка: песня \(id) «\(item.displayName)» начинается в \(Timecode(realSeconds: position, rate: director.clock.rate).text)")
     }
 
-    private func applyToEngine() {
+    func applyToEngine() {
         let d = settings.transition == .cut ? 0 : settings.transitionDuration
         engine.fadeOut = d
         engine.fadeIn = d
@@ -876,7 +378,7 @@ final class Show: ObservableObject {
         if engine.extras.audioDevice != settings.extrasAudioDevice { engine.extras.audioDevice = settings.extrasAudioDevice }
     }
 
-    private func settingsChanged(from old: Settings) {
+    func settingsChanged(from old: Settings) {
         // Сменили ноту первой песни — сдвинуть все ноты
         if settings.markerBaseNote != old.markerBaseNote {
             let delta = settings.markerBaseNote - old.markerBaseNote
@@ -909,7 +411,7 @@ final class Show: ObservableObject {
         }
     }
 
-    private func tick() {
+    func tick() {
         let now = HostTime.now
         let out = director.output(at: now)
         engine.update(out, next: director.nextCue(after: out), now: now)
@@ -943,7 +445,7 @@ final class Show: ObservableObject {
         }
     }
 
-    private func updateStatus(_ out: ShowOutput, now: Double) {
+    func updateStatus(_ out: ShowOutput, now: Double) {
         syncManualState()
         updateNowPlaying(out)
         updateLogic(now: now)
@@ -964,7 +466,7 @@ final class Show: ObservableObject {
         }
     }
 
-    private func updateNowPlaying(_ out: ShowOutput) {
+    func updateNowPlaying(_ out: ShowOutput) {
         var n = NowPlaying()
         var position: Double?
         var playPosition: Double?
@@ -1014,7 +516,7 @@ final class Show: ObservableObject {
         if playing?.0 != extrasNow?.playlist || playing?.1 != extrasNow?.item { extrasNow = playing }
     }
 
-    private func updateLogic(now: Double) {
+    func updateLogic(now: Double) {
         var s = LogicStatus()
         // Снимок, а не живой опрос: запросы к MIDI-серверу 10 раз в секунду могли подвесить главный поток
         let snap = link.snapshot
@@ -1067,7 +569,7 @@ final class Show: ObservableObject {
     }
 
     /// Не гасить экран и не засыпать, пока программа работает
-    private func preventDisplaySleep() {
+    func preventDisplaySleep() {
         let result = IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
                                                  IOPMAssertionLevel(kIOPMAssertionLevelOn),
                                                  "Live Video Sync: show output" as CFString, &sleepAssertion)
