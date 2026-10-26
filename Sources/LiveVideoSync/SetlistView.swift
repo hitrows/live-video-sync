@@ -36,28 +36,32 @@ private struct SetlistHeader: View {
                 Text(setlist.name)
                     .font(.title.weight(.bold))
                     .lineLimit(1)
-                if isActive {
-                    Text("Active")
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 3)
-                        .background(.quaternary, in: Capsule())
-                        .help("This setlist plays when the source sends timecode and marker notes")
-                } else {
-                    Button("Make Active") { show.makeActive(setlist.id) }
-                        .buttonStyle(.borderedProminent)
+                // Одна кнопка на одном месте, как «Get» → «Open» в App Store: ничего не прыгает
+                Button { show.makeActive(setlist.id) } label: {
+                    ZStack {
+                        // Ширина — по длинной надписи, чтобы кнопка не меняла размер
+                        Text("Make Active").hidden()
+                        if isActive {
+                            Label("Active", systemImage: "checkmark")
+                        } else {
+                            Text("Make Active")
+                        }
+                    }
                 }
+                .buttonStyle(.bordered)
+                .disabled(isActive)
+                .help(helpText(isActive: isActive))
                 Spacer()
             }
             Text(subtitle(isActive: isActive))
                 .foregroundStyle(.secondary)
-            if !isActive, let active = show.settings.active {
-                Text("\(active.name) is playing now. Make Active switches the show to this setlist.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
         }
+    }
+
+    private func helpText(isActive: Bool) -> String {
+        if isActive { return "This setlist plays when the source sends timecode and marker notes" }
+        let playing = show.settings.active.map { "\($0.name) is playing now. " } ?? ""
+        return playing + "Make Active switches the show to this setlist."
     }
 
     /// «12 songs · 52 min · Show Videos»
@@ -68,7 +72,6 @@ private struct SetlistHeader: View {
         if total > 0 { parts.append("\(Int((total / 60).rounded())) min") }
         let folders = Set(setlist.items.map { $0.url.deletingLastPathComponent().lastPathComponent })
         if folders.count == 1, let folder = folders.first { parts.append(folder) }
-        if !isActive { parts.append("not active") }
         return parts.joined(separator: " · ")
     }
 }
