@@ -19,6 +19,11 @@ final class SongSlot {
     /// Картинка вместо видео (слой поверх кадра видео)
     let imageLayer = CALayer()
     private(set) var image: CGImage?
+    /// Загружена картинка (сама она распаковывается в фоне и появляется чуть позже)
+    private(set) var isImage = false
+    private var imageFailed = false
+    /// Защита от устаревшей фоновой распаковки (слот успели перезагрузить)
+    private var loadToken = 0
 
     init() {
         player.isMuted = true
@@ -32,8 +37,6 @@ final class SongSlot {
         imageLayer.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
         layer.addSublayer(imageLayer)
     }
-
-    var isImage: Bool { image != nil }
 
     /// Рамка на экране; картинка — во весь слой
     func setFrame(_ frame: CGRect) {
@@ -55,16 +58,25 @@ final class SongSlot {
         started = false
         prerolled = false
         drift = nil
-        if Library.imageExtensions.contains(url.pathExtension.lowercased()) {
-            player.replaceCurrentItem(with: nil)
-            image = Self.loadImage(url)
-            imageLayer.contents = image
-            if image == nil { Log.info("Слот: картинка не открывается — \(url.lastPathComponent)") }
-            Log.info("Слот: загружена картинка \(id) (\(url.lastPathComponent))")
-            return
-        }
+        loadToken += 1
         image = nil
         imageLayer.contents = nil
+        imageFailed = false
+        isImage = Library.imageExtensions.contains(url.pathExtension.lowercased())
+        if isImage {
+            player.replaceCurrentItem(with: nil)
+            // Распаковка большой картинки — не на главном потоке (там таймер синхронизации)
+            let token = loadToken
+            Self.decodeImage(url) { [weak self] image in
+                guard let self, self.loadToken == token else { return }
+                self.image = image
+                self.imageLayer.contents = image
+                self.imageFailed = image == nil
+                if image == nil { Log.info("Слот: картинка не открывается — \(url.lastPathComponent)") }
+            }
+            Log.info("Слот: загружается картинка \(id) (\(url.lastPathComponent))")
+            return
+        }
         player.replaceCurrentItem(with: AVPlayerItem(url: url))
         if start > 0 { player.seek(to: CMTime(seconds: start, preferredTimescale: 90_000), toleranceBefore: .zero, toleranceAfter: .zero) }
         Log.info("Слот: загружена песня \(id) (\(url.lastPathComponent))")
@@ -75,6 +87,14 @@ final class SongSlot {
         return CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
     }
 
+    /// Распаковать картинку в фоне, результат — на главном потоке
+    static func decodeImage(_ url: URL, completion: @escaping (CGImage?) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let image = loadImage(url)
+            DispatchQueue.main.async { completion(image) }
+        }
+    }
+
     private var itemReady: Bool { player.currentItem?.status == .readyToPlay }
 
     private var duration: Double {
@@ -83,11 +103,10 @@ final class SongSlot {
     }
 
     /// Есть кадр на экране
-    var isReady: Bool { isImage || (itemReady && layer.isReadyForDisplay) }
+    var isReady: Bool { isImage ? image != nil : (itemReady && layer.isReadyForDisplay) }
 
     var failed: Bool {
-        if url != nil, player.currentItem == nil, image == nil { return true }
-        return player.currentItem?.status == .failed
+        isImage ? imageFailed : player.currentItem?.status == .failed
     }
 
     /// Длительность видео (без обрезки), с
@@ -158,7 +177,10 @@ final class SongSlot {
         player.replaceCurrentItem(with: nil)
         cueId = nil
         url = nil
+        loadToken += 1
         image = nil
+        isImage = false
+        imageFailed = false
         imageLayer.contents = nil
         started = false
         prerolled = false
@@ -188,6 +210,7 @@ final class LogoPlayer {
     /// Логотип-картинка (слой поверх кадра видео)
     let imageLayer = CALayer()
     private(set) var image: CGImage?
+    private var imageFailed = false
 
     init() {
         player.isMuted = true
@@ -207,11 +230,16 @@ final class LogoPlayer {
         player.removeAllItems()
         image = nil
         imageLayer.contents = nil
+        imageFailed = false
         guard let url else { return }
         if Library.imageExtensions.contains(url.pathExtension.lowercased()) {
-            image = SongSlot.loadImage(url)
-            imageLayer.contents = image
-            Log.info("Логотип (картинка): \(url.lastPathComponent)")
+            SongSlot.decodeImage(url) { [weak self] image in
+                guard let self, self.url == url else { return }
+                self.image = image
+                self.imageLayer.contents = image
+                self.imageFailed = image == nil
+                Log.info(image == nil ? "Логотип не открывается: \(url.lastPathComponent)" : "Логотип (картинка): \(url.lastPathComponent)")
+            }
             return
         }
         looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: url))
@@ -233,6 +261,12 @@ final class LogoPlayer {
 
     /// Без файла логотипа «готов» сразу — показывается чёрный
     var isReady: Bool { url == nil || image != nil || layer.isReadyForDisplay }
+
+    /// Файл логотипа не открывается
+    var failed: Bool {
+        guard url != nil else { return false }
+        return imageFailed || looper?.status == .failed || player.currentItem?.status == .failed
+    }
 }
 
 /// Видеодвижок: что видно на экране и плавные переходы между этим.
@@ -274,6 +308,7 @@ final class VideoEngine {
     var startForCue: (Int) -> Double = { _ in 0 }
 
     private(set) var visible: Element = .black
+    private var reportedBrokenLogo = false
     private var pendingFadeIn: (element: Element, notBefore: Double, since: Double)?
     private var fadingOutUntil: [Int: Double] = [:]
 
@@ -405,7 +440,12 @@ final class VideoEngine {
         case .black:
             show(.black, now: now)
         case .logo:
-            show(.logo, now: now)
+            // Битый логотип — не уводим в чёрное: остаётся то, что на экране (последний кадр песни)
+            if logo.failed, visible != .black {
+                if !reportedBrokenLogo { Log.info("Логотип не открывается — оставляю последний кадр"); reportedBrokenLogo = true }
+            } else {
+                show(.logo, now: now)
+            }
         case .extras:
             show(.extras, now: now)
         case .song(let id, let position, _):
@@ -467,8 +507,9 @@ final class VideoEngine {
         // после Trim — другое начало
         let url = urlForCue(id)
         let start = startForCue(id)
+        // Без проверки «есть видео»: у картинки его нет, и иначе она перезагружалась бы на каждом кадре
         return slots.firstIndex {
-            $0.cueId == id && $0.url == url && abs($0.startOffset - start) < 0.001 && $0.player.currentItem != nil
+            $0.cueId == id && $0.url != nil && $0.url == url && abs($0.startOffset - start) < 0.001
         }
     }
 

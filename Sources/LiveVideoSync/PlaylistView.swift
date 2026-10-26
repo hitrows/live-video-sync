@@ -182,6 +182,8 @@ private struct PlaylistRow: View {
     @Binding var renaming: UUID?
     @State private var hovering = false
     @State private var draft = ""
+    /// Окно стало неактивным — onHover «выход» может не прийти, и «•••» залипает на строке
+    @Environment(\.controlActiveState) private var activeState
     @FocusState private var editing: Bool
 
     private var info: MediaInfo? { show.media[item.path] }
@@ -242,6 +244,7 @@ private struct PlaylistRow: View {
         .padding(.vertical, 6)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
+        .onChange(of: activeState) { _, state in if state != .key { hovering = false } }
     }
 
     private var durationText: String {

@@ -339,6 +339,25 @@ enum Store {
         }
     }
 
+    private static let writeQueue = DispatchQueue(label: "lvs.settings")
+    private static var pendingSave: DispatchWorkItem?
+
+    /// Записать через полсекунды и не на главном потоке: при перетаскивании в Screen Fit настройки
+    /// меняются десятки раз в секунду — пишем один раз, когда движение закончилось
+    static func scheduleSave(_ settings: Settings) {
+        pendingSave?.cancel()
+        let item = DispatchWorkItem { save(settings) }
+        pendingSave = item
+        writeQueue.asyncAfter(deadline: .now() + 0.5, execute: item)
+    }
+
+    /// Выход из программы — записать сразу
+    static func flush(_ settings: Settings) {
+        pendingSave?.cancel()
+        pendingSave = nil
+        writeQueue.sync { save(settings) }
+    }
+
     static func save(_ settings: Settings) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

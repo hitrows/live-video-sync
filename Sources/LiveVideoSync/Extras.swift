@@ -22,6 +22,8 @@ final class ExtrasPlayer {
     var crossfade = 0.5
     var volume: Float = 1 { didSet { slots.forEach { $0.player.volume = volume } } }
     var audioDevice: String? { didSet { slots.forEach { $0.player.audioOutputDeviceUniqueID = audioDevice } } }
+    /// Вывод выключен (Stop Output) — звук Extras тоже не нужен
+    var muted = false { didSet { slots.forEach { $0.player.isMuted = muted } } }
     /// Плейлист доиграл (Repeat Off) или одиночное видео кончилось
     var onFinished: () -> Void = {}
 
@@ -35,6 +37,8 @@ final class ExtrasPlayer {
     /// Следующий файл загружен во второй слот и ждёт своей очереди
     private var preparedIndex: Int?
     private var switching = false
+    /// Номер запуска: отложенная пауза старого слоя не должна задеть новый запуск
+    private var generation = 0
 
     init() {
         container.opacity = 0
@@ -57,6 +61,7 @@ final class ExtrasPlayer {
         self.entries = entries
         self.index = index
         self.mode = mode
+        generation += 1
         isPlaying = true
         preparedIndex = nil
         switching = false
@@ -73,6 +78,7 @@ final class ExtrasPlayer {
     func stop() {
         guard isPlaying else { return }
         isPlaying = false
+        generation += 1
         for slot in slots {
             slot.player.pause()
             slot.unload()
@@ -146,9 +152,11 @@ final class ExtrasPlayer {
         index = next
         shownAt = now
         preparedIndex = nil
+        let gen = generation
         Log.info("Extras: \(entries[next].url.lastPathComponent)")
         DispatchQueue.main.asyncAfter(deadline: .now() + crossfade) { [weak self] in
-            guard let self else { return }
+            // Успели запустить другой плейлист — этот слой уже чужой, не трогаем
+            guard let self, self.generation == gen else { return }
             self.slots[old].player.pause()
             self.switching = false
         }
@@ -156,6 +164,7 @@ final class ExtrasPlayer {
 
     private func load(slot i: Int, index: Int) {
         slots[i].load(id: index + 1, url: entries[index].url)
+        slots[i].player.isMuted = muted
         slots[i].player.volume = volume
         slots[i].player.audioOutputDeviceUniqueID = audioDevice
     }

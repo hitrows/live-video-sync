@@ -54,10 +54,14 @@ final class NetworkMIDILink: NSObject, NetServiceBrowserDelegate, NetServiceDele
     func start() {
         MIDIClientCreateWithBlock("NetworkMIDILink" as CFString, &client) { [weak self] notification in
             if notification.pointee.messageID == .msgPropertyChanged || notification.pointee.messageID == .msgSetupChanged {
-                DispatchQueue.main.async { self?.onChange?() }
+                DispatchQueue.main.async {
+                    self?.refreshSnapshot()
+                    self?.onChange?()
+                }
             }
         }
         prepareSession()
+        refreshSnapshot()
         browser.delegate = self
         browser.searchForServices(ofType: "_apple-midi._udp.", inDomain: "local.")
         let t = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.maintain() }
@@ -148,6 +152,20 @@ final class NetworkMIDILink: NSObject, NetServiceBrowserDelegate, NetServiceDele
         services.contains { $0.name == name }
     }
 
+    /// Снимок состояния для частого чтения (окно плеера): каждое чтение свойств сеанса — запрос к MIDI-серверу,
+    /// и если он занят (плохая сеть), главный поток ждёт. Снимок обновляется раз в 2 с и после подключения/отключения.
+    struct Snapshot: Equatable {
+        var hasSession = false
+        var sessionName = ""
+        var connections: [Connection] = []
+    }
+    private(set) var snapshot = Snapshot()
+
+    private func refreshSnapshot() {
+        let fresh = Snapshot(hasSession: hasSession, sessionName: sessionName, connections: connections)
+        if fresh != snapshot { snapshot = fresh }
+    }
+
     /// Подключён ли (или подключается) этот Mac
     func isConnected(_ peer: Peer) -> Bool {
         connections.contains { c in
@@ -173,6 +191,7 @@ final class NetworkMIDILink: NSObject, NetServiceBrowserDelegate, NetServiceDele
         }
         settings["persistent-peers"] = persistent
         log("Подключение к «\(peer.name)» (\(address)): \(writeSettings(settings) ? "ok" : "ошибка")")
+        refreshSnapshot()
         onChange?()
     }
 
@@ -182,6 +201,7 @@ final class NetworkMIDILink: NSObject, NetServiceBrowserDelegate, NetServiceDele
         let list = ((settings["peers"] as? [NSDictionary]) ?? []).filter { ($0["address"] as? String) != address }
         settings["peers"] = list
         writeSettings(settings)
+        refreshSnapshot()
     }
 
     func disconnectAll() {
@@ -189,10 +209,12 @@ final class NetworkMIDILink: NSObject, NetServiceBrowserDelegate, NetServiceDele
         settings["peers"] = []
         settings["persistent-peers"] = []
         log("Отключено всё: \(writeSettings(settings) ? "ok" : "ошибка")")
+        refreshSnapshot()
         onChange?()
     }
 
     private func maintain() {
+        refreshSnapshot()
         let status = connections.map { "\($0.name) [\($0.address)] \($0.state.isEmpty ? "—" : $0.state)" }.joined(separator: ", ")
         if status != lastStatus {
             log("Подключения: \(status.isEmpty ? "нет" : status)")

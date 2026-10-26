@@ -107,6 +107,11 @@ private struct GeneralSettings: View {
         }
         .formStyle(.grouped)
         .fixedSize(horizontal: false, vertical: true)
+        // Колонки и интерфейсы подключают и после запуска — список обновляем при каждом открытии
+        .onAppear { audioOutputs = AudioDevices.outputs() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            audioOutputs = AudioDevices.outputs()
+        }
     }
 }
 
@@ -204,7 +209,8 @@ private struct OutputSettings: View {
                     Button("Choose…", action: show.chooseLogo)
                 } label: {
                     RowLabel(show.settings.logoPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No logo",
-                             "Loops between songs and after Stop on the source")
+                             logoProblem.map { "⚠︎ \($0) The last frame stays on screen instead." }
+                                ?? "Loops between songs and after Stop on the source")
                 }
             }
             Section("While the Player Restarts") {
@@ -228,6 +234,11 @@ private struct OutputSettings: View {
         .fixedSize(horizontal: false, vertical: true)
         .onAppear(perform: loadModes)
         .onChange(of: show.settings.display) { _, _ in loadModes() }
+    }
+
+    private var logoProblem: String? {
+        guard let path = show.settings.logoPath, let info = show.media[path], !info.playable else { return nil }
+        return info.problem
     }
 
     private func loadModes() {

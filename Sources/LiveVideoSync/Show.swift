@@ -113,7 +113,10 @@ final class Show: ObservableObject {
     @Published private(set) var hasMIDISession = true
     /// Тестовая сетка на экране сцены (не сохраняется: после перезапуска — шоу, а не сетка)
     @Published var testPattern = false {
-        didSet { engine.testPattern = testPattern }
+        didSet {
+            if testPattern { engine.testPatternTitle = testPatternTitle }
+            engine.testPattern = testPattern
+        }
     }
     @Published private(set) var midiSessionName = ""
 
@@ -129,6 +132,7 @@ final class Show: ObservableObject {
     private var sleepAssertion: IOPMAssertionID = 0
     /// Когда пропала связь с Logic Mac (для баннера — не показывать короткие перебои)
     private var linkDownSince: Date?
+    private var lastTitleState: OutputState?
     private var everConnected = false
 
     private init() {
@@ -165,6 +169,13 @@ final class Show: ObservableObject {
         preventDisplaySleep()
 
         output.onStageScreen = { [weak self] screen in self?.stageScreenFound(screen) }
+        // Экран отключили — при следующем подключении режим ставим снова
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            let present = Set(NSScreen.screens.map(self.stageKey))
+            self.modeAttempts = self.modeAttempts.filter { present.contains($0.key) }
+        }
         output.choice = outputChoice
         output.live = settings.live
         engine.logo.load(settings.logoPath.map(URL.init(fileURLWithPath:)))
@@ -271,10 +282,17 @@ final class Show: ObservableObject {
         DisplayModes.displayKey(OutputController.ref(for: screen))
     }
 
+    /// Какой режим уже пробовали поставить на подключённый экран. Одна попытка на подключение:
+    /// если экран принял режим чуть иначе (59.94 вместо 60 Гц), иначе ставили бы его по кругу — проектор мигал бы
+    private var modeAttempts: [String: DisplayModeRef] = [:]
+    /// Пока открыто «Keep this resolution?» — сохранённый режим сам не ставим, иначе он перебьёт пробный
+    private var resolutionTrialKey: String?
+
     private func stageScreenFound(_ screen: NSScreen) {
         let key = stageKey(screen)
         let id = OutputController.displayID(screen)
-        if let wanted = settings.resolutions[key] {
+        if let wanted = settings.resolutions[key], resolutionTrialKey != key, modeAttempts[key] != wanted {
+            modeAttempts[key] = wanted
             if settings.originalModes[key] == nil, let current = DisplayModes.current(id), current != wanted {
                 settings.originalModes[key] = current
             }
@@ -288,6 +306,7 @@ final class Show: ObservableObject {
         let key = stageKey(screen)
         let id = OutputController.displayID(screen)
         let before = DisplayModes.current(id)
+        resolutionTrialKey = key
         if let wanted {
             if settings.originalModes[key] == nil, let before { settings.originalModes[key] = before }
             DisplayModes.set(wanted, on: id)
@@ -299,12 +318,16 @@ final class Show: ObservableObject {
 
     func keepResolution(_ wanted: DisplayModeRef?, on screen: NSScreen) {
         let key = stageKey(screen)
+        resolutionTrialKey = nil
+        modeAttempts[key] = wanted
         settings.resolutions[key] = wanted
         if wanted == nil { settings.originalModes[key] = nil }
         Log.info("Разрешение экрана сцены: \(wanted?.title ?? "Default") — сохранено")
     }
 
     func revertResolution(to mode: DisplayModeRef?, on screen: NSScreen) {
+        resolutionTrialKey = nil
+        modeAttempts[stageKey(screen)] = nil
         guard let mode else { return }
         DisplayModes.set(mode, on: OutputController.displayID(screen))
         Log.info("Разрешение экрана сцены возвращено: \(mode.title)")
@@ -344,6 +367,12 @@ final class Show: ObservableObject {
         settings.restartImagePath = url.path
         settings.restartScreen = .image
         if let screen = stageScreen, settings.live { setRestartWallpaper(on: screen) }
+    }
+
+    /// Штатный выход: вернуть экран сцены и сразу записать настройки
+    func prepareToQuit() {
+        restoreStageScreen()
+        Store.flush(settings)
     }
 
     /// Штатный выход: вернуть прежние разрешение и обои экрана сцены
@@ -843,6 +872,7 @@ final class Show: ObservableObject {
         director.markerBaseNote = settings.markerBaseNote
         engine.extras.imageDuration = max(1, settings.extrasImageDuration)
         engine.extras.volume = Float(settings.extrasVolume)
+        engine.extras.muted = !settings.live
         if engine.extras.audioDevice != settings.extrasAudioDevice { engine.extras.audioDevice = settings.extrasAudioDevice }
     }
 
@@ -861,7 +891,7 @@ final class Show: ObservableObject {
            let i = settings.venuePresets.firstIndex(where: { $0.id == id }), settings.venuePresets[i].fit != settings.screenFit {
             settings.venuePresets[i].fit = settings.screenFit
         }
-        Store.save(settings)
+        Store.scheduleSave(settings)
         applyToEngine()
         output.choice = outputChoice
         output.live = settings.live
@@ -927,7 +957,11 @@ final class Show: ObservableObject {
             state = .waitingForDisplay(display: expectedDisplayName)
         }
         if state != outputState { outputState = state }
-        engine.testPatternTitle = testPatternTitle
+        // Подпись сетки (перебор экранов) — только когда сетка включена, раз в секунду
+        if engine.testPattern, ticks % 60 == 0 || state != lastTitleState {
+            engine.testPatternTitle = testPatternTitle
+            lastTitleState = state
+        }
     }
 
     private func updateNowPlaying(_ out: ShowOutput) {
@@ -982,12 +1016,13 @@ final class Show: ObservableObject {
 
     private func updateLogic(now: Double) {
         var s = LogicStatus()
-        let session = link.hasSession
+        // Снимок, а не живой опрос: запросы к MIDI-серверу 10 раз в секунду могли подвесить главный поток
+        let snap = link.snapshot
+        let session = snap.hasSession
         if session != hasMIDISession { hasMIDISession = session }
-        let name = link.sessionName
-        if name != midiSessionName { midiSessionName = name }
+        if snap.sessionName != midiSessionName { midiSessionName = snap.sessionName }
 
-        let connections = link.connections
+        let connections = snap.connections
         let age = director.lastMessageHost.map { now - $0 }
         let midiFlowing = (age ?? 99) < 2
         // Подключение записано в сеансе, даже когда тот Mac выключен — поэтому ещё и «виден ли он в сети сейчас»
