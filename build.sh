@@ -15,6 +15,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 mv build/LiveVideoSync "$APP/Contents/MacOS/LiveVideoSync"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+# Номер сборки — число коммитов: About показывает «Version 0.8 (123)»
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(git rev-list --count HEAD 2>/dev/null || echo 1)" "$APP/Contents/Info.plist"
 mkdir -p "$APP/Contents/Resources"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # Свой акцентный цвет — синий (системный розовый/красный акцент спутать с «в эфире»)

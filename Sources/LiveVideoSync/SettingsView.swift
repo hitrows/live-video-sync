@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Live Video Sync → Settings… (⌘,): General / Logic / Output / Help
+/// Live Video Sync → Settings… (⌘,): General / Sync / Output / Help / About
 struct SettingsView: View {
     @ObservedObject var show: Show
 
@@ -15,6 +15,8 @@ struct SettingsView: View {
                 .tabItem { Label("Output", systemImage: "display") }
             HelpSettings()
                 .tabItem { Label("Help", systemImage: "questionmark.circle") }
+            AboutSettings(updater: .shared)
+                .tabItem { Label("About", systemImage: "info.circle") }
         }
         .frame(width: 520)
     }
@@ -321,5 +323,65 @@ private struct HelpSettings: View {
         }
         .formStyle(.grouped)
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+private struct AboutSettings: View {
+    @ObservedObject var updater: Updater
+
+    var body: some View {
+        Form {
+            Section {
+                VStack(spacing: 6) {
+                    Image(nsImage: NSApp.applicationIconImage)
+                        .resizable()
+                        .frame(width: 96, height: 96)
+                    Text("Live Video Sync")
+                        .font(.title2.weight(.semibold))
+                    Text("Version \(Updater.version)" + (Updater.build.isEmpty ? "" : " (\(Updater.build))"))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+            }
+            Section("Updates") {
+                Toggle(isOn: $updater.autoInstall) {
+                    RowLabel("Automatically install updates",
+                             "Installs a new version when the app opens. Never during a show.")
+                }
+                .toggleStyle(.switch)
+                LabeledContent {
+                    if case .available(let release) = updater.state {
+                        Button("Update Now") { updater.install(release) }
+                    } else {
+                        Button("Check for Updates") { updater.checkNow() }
+                            .disabled(updater.busy)
+                    }
+                } label: {
+                    RowLabel(statusTitle, statusDetail)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var statusTitle: String {
+        switch updater.state {
+        case .checking: return "Checking for updates…"
+        case .available(let release): return "Version \(release.version) is available"
+        case .downloading: return "Downloading update…"
+        case .installing: return "Installing update…"
+        case .failed: return "Couldn’t check for updates"
+        case .upToDate: return "Live Video Sync is up to date"
+        case .idle: return "Software Update"
+        }
+    }
+
+    private var statusDetail: String {
+        if case .failed(let message) = updater.state { return message }
+        guard let date = updater.lastChecked else { return "Not checked yet" }
+        return "Last checked: " + date.formatted(.relative(presentation: .named))
     }
 }

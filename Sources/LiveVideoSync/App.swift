@@ -84,7 +84,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = NSAppearance(named: .darkAqua)
+        // Трансляция была включена — значит, это перезапуск во время шоу: обновления не трогаем
+        let duringShow = Show.shared.settings.live
         Show.shared.start()
+        Updater.shared.checkAtLaunch(duringShow: duringShow)
         let ui = UIState.shared
         if ui.selection == nil, let id = Show.shared.settings.activeSetlist ?? Show.shared.settings.setlists.first?.id {
             ui.selection = .setlist(id)
@@ -125,6 +128,9 @@ struct LiveVideoSyncApp: App {
         }
         .defaultSize(width: 1320, height: 860)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { Updater.shared.checkNow() }
+            }
             CommandGroup(replacing: .newItem) {
                 FileMenu(show: .shared, ui: .shared)
             }

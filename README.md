@@ -102,3 +102,11 @@ MacBook с Logic шлёт таймкод по Wi-Fi (сетевой MIDI macOS) 
 ```
 
 Лог: `~/Library/Logs/LiveVideoSync/lvs.log`. Настройки и сеты: `~/Library/Application Support/LiveVideoSync/settings.json`; что вернуть на экране сцены при выходе (обои, разрешение): `stage.json` там же.
+
+## Версии и обновления
+
+Версия — `CFBundleShortVersionString` в `Resources/Info.plist`, номер сборки = число коммитов.
+Выпуск: поднять версию и запустить `./release.sh "Что нового"` — соберёт zip и создаст релиз на GitHub.
+Программа проверяет релизы при запуске (Update Now / Later / Skip This Version) или ставит сама,
+если в Settings → About включено **Automatically install updates**. Во время шоу и после перезапуска
+во время шоу обновление не проверяется и не ставится.
