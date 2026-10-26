@@ -202,18 +202,22 @@ private struct PlaylistRow: View {
             leading
                 .frame(width: 28, alignment: .trailing)
             title
-            // Этот файл — логотип: тот же значок, что у кнопки Logo
-            if show.settings.logoPath == item.path {
-                Image(systemName: "sparkles.rectangle.stack")
-                    .foregroundStyle(.secondary)
-                    .help("This file is the logo")
-            }
             if info?.hasAudio == true {
                 Image(systemName: "speaker.wave.2")
                     .foregroundStyle(.secondary)
                     .help("Plays with sound")
             }
             Spacer(minLength: 12)
+            // Этот файл — логотип: тот же значок, что у кнопки Logo; своя колонка перед типом, как ножницы в сет-листе
+            Group {
+                if show.settings.logoPath == item.path {
+                    Image(systemName: "sparkles.rectangle.stack")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .help("This file is the logo")
+                }
+            }
+            .frame(width: 18)
             Text(info?.isImage == true ? "IMAGE" : "VIDEO")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
