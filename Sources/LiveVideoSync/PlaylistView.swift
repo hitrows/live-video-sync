@@ -11,16 +11,7 @@ struct PlaylistDetail: View {
     var body: some View {
         if let playlist = show.playlist(playlistID) {
             VStack(alignment: .leading, spacing: 0) {
-                Banners(show: show)
-                    .padding(.horizontal, 24)
-                    .padding(.top, 12)
-                HStack(alignment: .top, spacing: 24) {
-                    PreviewPanel(show: show)
-                        .frame(maxWidth: 620)
-                    NowPlayingPanel(show: show)
-                }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 16)
+                ShowTop(show: show)
                 PlaylistHeader(show: show, playlist: playlist)
                     .padding(.horizontal, 24)
                     .padding(.bottom, 8)
@@ -113,14 +104,7 @@ private struct PlaylistItems: View {
                 }
                 .onMove(perform: filtered ? nil : { show.movePlaylistItems(in: playlist.id, from: $0, to: $1) })
                 .onInsert(of: [.fileURL]) { index, providers in
-                    Task { @MainActor in
-                        var urls: [URL] = []
-                        for p in providers {
-                            if let data = try? await p.loadItem(forTypeIdentifier: UTType.fileURL.identifier) as? Data,
-                               let u = URL(dataRepresentation: data, relativeTo: nil) { urls.append(u) }
-                        }
-                        show.addFiles(urls, toPlaylist: playlist.id, at: index)
-                    }
+                    Task { @MainActor in show.addFiles(await fileURLs(from: providers), toPlaylist: playlist.id, at: index) }
                 }
             }
             .listStyle(.inset)
@@ -181,10 +165,6 @@ private struct PlaylistRow: View {
     let number: Int
     @Binding var renaming: UUID?
     @State private var hovering = false
-    @State private var draft = ""
-    /// Окно стало неактивным — onHover «выход» может не прийти, и «•••» залипает на строке
-    @Environment(\.controlActiveState) private var activeState
-    @FocusState private var editing: Bool
 
     private var info: MediaInfo? { show.media[item.path] }
     private var isPlaying: Bool { show.extrasNow?.playlist == playlist.id && show.extrasNow?.item == item.id }
@@ -231,20 +211,12 @@ private struct PlaylistRow: View {
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
-            Menu {
+            RowMenuButton(visible: hovering) {
                 PlaylistItemMenu(show: show, playlist: playlist, item: item, renaming: $renaming)
-            } label: {
-                Image(systemName: "ellipsis")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .opacity(hovering ? 1 : 0)
-            .frame(width: 24)
         }
         .padding(.vertical, 6)
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onChange(of: activeState) { _, state in if state != .key { hovering = false } }
+        .modifier(RowHover(hovering: $hovering))
     }
 
     private var durationText: String {
@@ -270,30 +242,9 @@ private struct PlaylistRow: View {
         }
     }
 
-    @ViewBuilder
     private var title: some View {
-        if renaming == item.id {
-            TextField("Name", text: $draft)
-                .textFieldStyle(.roundedBorder)
-                .focused($editing)
-                .frame(maxWidth: 360)
-                .onAppear {
-                    draft = item.displayName
-                    editing = true
-                }
-                .onSubmit { commit() }
-                .onExitCommand { renaming = nil }
-                .onChange(of: editing) { _, focused in if !focused { commit() } }
-        } else {
-            Text(item.displayName)
-                .lineLimit(1)
-                .foregroundStyle(onAir ? .red : info?.missing == true ? .secondary : .primary)
-        }
-    }
-
-    private func commit() {
-        guard renaming == item.id else { return }
-        show.renamePlaylistItem(item.id, in: playlist.id, to: draft)
-        renaming = nil
+        InlineRename(id: item.id, name: item.displayName,
+                     color: onAir ? .red : info?.missing == true ? .secondary : .primary,
+                     renaming: $renaming) { show.renamePlaylistItem(item.id, in: playlist.id, to: $0) }
     }
 }

@@ -12,16 +12,7 @@ struct SetlistDetail: View {
     var body: some View {
         if let setlist = show.setlist(setlistID) {
             VStack(alignment: .leading, spacing: 0) {
-                Banners(show: show)
-                    .padding(.horizontal, 24)
-                    .padding(.top, 12)
-                HStack(alignment: .top, spacing: 24) {
-                    PreviewPanel(show: show)
-                        .frame(maxWidth: 620)
-                    NowPlayingPanel(show: show)
-                }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 16)
+                ShowTop(show: show)
                 SetlistHeader(show: show, setlist: setlist)
                     .padding(.horizontal, 24)
                     .padding(.bottom, 8)
@@ -149,14 +140,7 @@ private struct TrackList: View {
             }
             .onMove(perform: filtered ? nil : { from, to in show.moveItems(in: setlist.id, from: from, to: to) })
             .onInsert(of: [.fileURL]) { index, providers in
-                Task { @MainActor in
-                    var urls: [URL] = []
-                    for p in providers {
-                        if let url = try? await p.loadItem(forTypeIdentifier: UTType.fileURL.identifier) as? Data,
-                           let u = URL(dataRepresentation: url, relativeTo: nil) { urls.append(u) }
-                    }
-                    show.addFiles(urls, to: setlist.id, at: index)
-                }
+                Task { @MainActor in show.addFiles(await fileURLs(from: providers), to: setlist.id, at: index) }
             }
         }
         .listStyle(.inset)
@@ -254,10 +238,6 @@ private struct TrackRow: View {
     let onProblem: (SetlistItem, MediaInfo) -> Void
 
     @State private var hovering = false
-    @State private var draft = ""
-    /// Окно стало неактивным — onHover «выход» может не прийти, и «•••» залипает на строке
-    @Environment(\.controlActiveState) private var activeState
-    @FocusState private var editing: Bool
 
     private var info: MediaInfo? { show.info(item) }
     private var isPlaying: Bool { isActiveSet && show.nowPlaying.itemID == item.id }
@@ -288,12 +268,9 @@ private struct TrackRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
             menuButton
-                .frame(width: 24)
         }
         .padding(.vertical, 6)
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onChange(of: activeState) { _, state in if state != .key { hovering = false } }
+        .modifier(RowHover(hovering: $hovering))
     }
 
     @ViewBuilder
@@ -329,31 +306,10 @@ private struct TrackRow: View {
         }
     }
 
-    @ViewBuilder
     private var title: some View {
-        if renaming == item.id {
-            TextField("Name", text: $draft)
-                .textFieldStyle(.roundedBorder)
-                .focused($editing)
-                .frame(maxWidth: 360)
-                .onAppear {
-                    draft = item.displayName
-                    editing = true
-                }
-                .onSubmit { commit() }
-                .onExitCommand { renaming = nil }
-                .onChange(of: editing) { _, focused in if !focused { commit() } }
-        } else {
-            Text(item.displayName)
-                .lineLimit(1)
-                .foregroundStyle(onAir ? .red : info?.missing == true ? .secondary : .primary)
-        }
-    }
-
-    private func commit() {
-        guard renaming == item.id else { return }
-        show.renameItem(item.id, in: setlist.id, to: draft)
-        renaming = nil
+        InlineRename(id: item.id, name: item.displayName,
+                     color: onAir ? .red : info?.missing == true ? .secondary : .primary,
+                     renaming: $renaming) { show.renameItem(item.id, in: setlist.id, to: $0) }
     }
 
     /// Нота-метка: отдельная колонка, все плашки ровно друг под другом
@@ -370,15 +326,9 @@ private struct TrackRow: View {
                   : "Marker note. Not learned yet — play this song from its start once.")
     }
 
-    @ViewBuilder
     private var menuButton: some View {
-        Menu {
+        RowMenuButton(visible: hovering) {
             ItemMenu(show: show, setlist: setlist, item: item, renaming: $renaming, trimming: $trimming)
-        } label: {
-            Image(systemName: "ellipsis")
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .opacity(hovering ? 1 : 0)
     }
 }
