@@ -21,6 +21,8 @@ struct NowPlaying: Equatable {
     var title = ""
     var position = 0.0
     var duration = 0.0
+    /// Когда позиция была position — между обновлениями полоска досчитывает сама (плавно)
+    var positionDate = Date.distantPast
     var drift: Int?
     /// Extras: «Band Logos · Repeat All»
     var extrasSource: String?
@@ -918,7 +920,11 @@ final class Show: ObservableObject {
             n.next = String(format: "%02d", next) + " " + item.displayName
                 + " · marker " + Self.noteName(note(item, in: settings.active))
         }
-        if n != nowPlaying { nowPlaying = n }
+        n.positionDate = Date()
+        // Сравниваем без времени снимка — иначе обновлялось бы каждый раз
+        var cmp = nowPlaying
+        cmp.positionDate = n.positionDate
+        if n != cmp || abs(n.position - nowPlaying.position) > 0.5 { nowPlaying = n }
         let playing = out == .extras ? extrasPlaylist.flatMap { p in n.itemID.map { (p, $0) } } : nil
         if playing?.0 != extrasNow?.playlist || playing?.1 != extrasNow?.item { extrasNow = playing }
     }

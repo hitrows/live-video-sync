@@ -126,16 +126,27 @@ struct NowPlayingPanel: View {
             StatusLine(color: modeColor(n), text: modeText(n))
 
             if n.number != nil, n.duration > 0, n.duration.isFinite {
-                ProgressView(value: min(n.position, n.duration), total: n.duration)
-                    .progressViewStyle(.linear)
-                    .frame(maxWidth: 280)
-                HStack {
-                    Text(Show.minutes(n.position))
-                    Spacer()
-                    Text("−" + Show.minutes(n.duration - n.position))
+                // Плавно: позицию досчитываем на каждом кадре экрана от последнего обновления
+                TimelineView(.animation) { context in
+                    let p = min(n.duration, max(0, n.position + context.date.timeIntervalSince(n.positionDate)))
+                    VStack(alignment: .leading, spacing: 6) {
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(.quaternary)
+                                Capsule().fill(Color.accentColor)
+                                    .frame(width: max(4, geo.size.width * p / n.duration))
+                            }
+                        }
+                        .frame(height: 6)
+                        HStack {
+                            Text(Show.minutes(p))
+                            Spacer()
+                            Text("−" + Show.minutes(n.duration - p))
+                        }
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    }
                 }
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
                 .frame(maxWidth: 280)
             }
             if let next = n.next {
