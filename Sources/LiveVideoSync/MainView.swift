@@ -132,6 +132,8 @@ private struct Sidebar: View {
                         Button("Delete Setlist…") { deleting = setlist }
                     }
                 }
+                // Порядок сетов — перетаскиванием
+                .onMove { show.settings.setlists.move(fromOffsets: $0, toOffset: $1) }
             }
             Section("Extras") {
                 ForEach(show.settings.playlists) { playlist in
@@ -160,9 +162,15 @@ private struct Sidebar: View {
                         Button("Delete Playlist…") { deletingPlaylist = playlist }
                     }
                 }
+                .onMove { show.settings.playlists.move(fromOffsets: $0, toOffset: $1) }
             }
         }
         .listStyle(.sidebar)
+        // Правый щелчок по пустому месту — как в Музыке
+        .contextMenu {
+            Button("New Setlist") { ui.newSetlist(show) }
+            Button("New Playlist") { ui.newPlaylist(show) }
+        }
         .safeAreaInset(edge: .bottom) {
             HStack {
                 Menu {
