@@ -18,9 +18,10 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 # Номер сборки — число коммитов: About показывает «Version 0.8 (123)»
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(git rev-list --count HEAD 2>/dev/null || echo 1)" "$APP/Contents/Info.plist"
 mkdir -p "$APP/Contents/Resources"
-cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+# Иконка — Resources/AppIcon.icon (Icon Composer, Liquid Glass); для macOS 15 actool сам делает AppIcon.icns.
 # Свой акцентный цвет — синий (системный розовый/красный акцент спутать с «в эфире»)
-xcrun actool Resources/Assets.xcassets --compile "$APP/Contents/Resources" --platform macosx \
+xcrun actool Resources/Assets.xcassets Resources/AppIcon.icon --app-icon AppIcon \
+  --compile "$APP/Contents/Resources" --platform macosx \
   --minimum-deployment-target 15.0 --output-partial-info-plist build/assets-info.plist >/dev/null
 codesign --force --sign - "$APP"
 

@@ -1,0 +1,98 @@
+{
+  "fill": {
+    "linear-gradient": [
+      "srgb:0.35686,0.36078,0.94118,1.00000",
+      "srgb:0.14510,0.13725,0.43137,1.00000"
+    ],
+    "orientation": {
+      "start": {
+        "x": 0.5,
+        "y": 0
+      },
+      "stop": {
+        "x": 0.5,
+        "y": 1
+      }
+    }
+  },
+  "fill-specializations": [
+    {
+      "appearance": "dark",
+      "value": {
+        "linear-gradient": [
+          "srgb:0.16863,0.16471,0.43137,1.00000",
+          "srgb:0.05098,0.04706,0.14902,1.00000"
+        ],
+        "orientation": {
+          "start": {
+            "x": 0.5,
+            "y": 0
+          },
+          "stop": {
+            "x": 0.5,
+            "y": 1
+          }
+        }
+      }
+    }
+  ],
+  "groups": [
+    {
+      "name": "Video",
+      "layers": [
+        {
+          "image-name": "4 Play.svg",
+          "name": "Play",
+          "glass": false
+        },
+        {
+          "image-name": "3 Video plate.svg",
+          "name": "Video plate",
+          "glass": true,
+          "opacity": 0.55
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "specular": true,
+      "blur-material": 0.6,
+      "translucency": {
+        "enabled": true,
+        "value": 0.4
+      },
+      "lighting": "combined"
+    },
+    {
+      "name": "Audio",
+      "layers": [
+        {
+          "image-name": "2 Wave.svg",
+          "name": "Wave",
+          "glass": false
+        },
+        {
+          "image-name": "1 Audio plate.svg",
+          "name": "Audio plate",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "layer-color",
+        "opacity": 0.5
+      },
+      "specular": true,
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      },
+      "lighting": "combined"
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}
