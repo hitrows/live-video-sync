@@ -27,6 +27,15 @@ struct MainView: View {
                 .frame(width: 190)
             }
             ToolbarItem(placement: .primaryAction) {
+                // Одним нажатием: вывод в окно на этом Mac ↔ на экран сцены
+                Toggle(isOn: Binding(get: { show.settings.testWindow }, set: { _ in show.toggleTestWindow() })) {
+                    Label("Test Window", systemImage: "macwindow")
+                }
+                .toggleStyle(.button)
+                .help(show.settings.testWindow ? "Output goes to a test window on this Mac. Click to send it to the stage display."
+                                               : "Output goes to the stage display. Click to show it in a test window on this Mac instead.")
+            }
+            ToolbarItem(placement: .primaryAction) {
                 liveButton
             }
         }
@@ -246,6 +255,12 @@ struct Banners: View {
 
     var body: some View {
         VStack(spacing: 8) {
+            // Сетку включают только в Screen Fit, а выключить можно отовсюду
+            if show.testPattern {
+                Banner(symbol: "squareshape.split.3x3",
+                       text: "Test Pattern is on the stage screen instead of the show.",
+                       button: "Turn Off") { show.testPattern = false }
+            }
             if case .waitingForDisplay(let name) = show.outputState {
                 Banner(symbol: "display.trianglebadge.exclamationmark",
                        text: "Stage display not found. Connect \(name) — the show comes back on it by itself.",

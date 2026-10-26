@@ -85,8 +85,8 @@ private struct GeneralSettings: View {
                 Picker(selection: $show.settings.markerBaseNote) {
                     ForEach(0..<116, id: \.self) { Text(Show.noteName($0)).tag($0) }
                 } label: {
-                    RowLabel("First song marker",
-                             "Song 1 = \(Show.noteName(show.settings.markerBaseNote)), song 2 = \(Show.noteName(show.settings.markerBaseNote + 1)) … (position in the setlist)")
+                    RowLabel("First marker note",
+                             "New songs get the next free note after it. Changing it moves all notes.")
                 }
             }
             Section("Extras") {
@@ -177,8 +177,7 @@ private struct OutputSettings: View {
                     ForEach(displayRefs, id: \.self) { ref in
                         Text(ref.name + (connected(ref) ? "" : " (not connected)")).tag(DisplayChoice.specific(ref))
                     }
-                    Divider()
-                    Text("Window (test)").tag(DisplayChoice.window)
+
                 } label: {
                     RowLabel("Display", "Found again by itself when plugged back in")
                 }

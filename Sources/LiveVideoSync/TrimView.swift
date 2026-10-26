@@ -201,76 +201,90 @@ final class TrimModel: ObservableObject {
     }
 }
 
-/// Лента кадров: жёлтая рамка с ручками — выбранный отрезок, белая линия — где сейчас
+/// Лента кадров как в Фото: жёлтая рамка с широкими ручками — выбранный отрезок, белая линия — где сейчас
 private struct FilmStrip: View {
     @ObservedObject var model: TrimModel
+    private let handle: CGFloat = 12
+    private let border: CGFloat = 3
 
     var body: some View {
         GeometryReader { geo in
-            let w = geo.size.width
-            let x = { (t: Double) in CGFloat(t / max(model.duration, 0.01)) * w }
-            let time = { (px: CGFloat) in Double(min(max(0, px), w) / w) * model.duration }
+            let w = geo.size.width - handle * 2, h = geo.size.height
+            let x = { (t: Double) in handle + CGFloat(t / max(model.duration, 0.01)) * w }
+            let time = { (px: CGFloat) in Double(min(max(0, px - handle), w) / w) * model.duration }
+            let left = x(model.start), right = x(model.end)
             ZStack(alignment: .topLeading) {
+                // Кадры
                 HStack(spacing: 0) {
                     ForEach(model.thumbnails.indices, id: \.self) { i in
                         Image(decorative: model.thumbnails[i], scale: 1)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
-                            .frame(width: w / CGFloat(max(1, model.thumbnails.count)), height: geo.size.height)
+                            .frame(width: w / CGFloat(max(1, model.thumbnails.count)), height: h - border * 2)
                             .clipped()
                     }
                 }
-                .frame(width: w, height: geo.size.height, alignment: .leading)
-                .background(.black)
+                .frame(width: w, height: h - border * 2, alignment: .leading)
+                .background(Color.black)
+                .offset(x: handle, y: border)
                 .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 0).onChanged { model.seek(time($0.location.x)) })
+                .gesture(DragGesture(minimumDistance: 0).onChanged { model.seek(time($0.location.x + handle)) })
 
                 // Вне отрезка — затемнено
-                Rectangle().fill(.black.opacity(0.55))
-                    .frame(width: x(model.start))
+                Rectangle().fill(.black.opacity(0.6))
+                    .frame(width: max(0, left - handle), height: h - border * 2)
+                    .offset(x: handle, y: border)
                     .allowsHitTesting(false)
-                Rectangle().fill(.black.opacity(0.55))
-                    .frame(width: max(0, w - x(model.end)))
-                    .offset(x: x(model.end))
-                    .allowsHitTesting(false)
-
-                RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(.yellow, lineWidth: 3)
-                    .frame(width: max(12, x(model.end) - x(model.start)))
-                    .offset(x: x(model.start))
+                Rectangle().fill(.black.opacity(0.6))
+                    .frame(width: max(0, handle + w - right), height: h - border * 2)
+                    .offset(x: right, y: border)
                     .allowsHitTesting(false)
 
-                handle(left: true)
-                    .offset(x: x(model.start))
+                // Жёлтая рамка: верх и низ
+                Rectangle().fill(.yellow)
+                    .frame(width: right - left + handle * 2, height: border)
+                    .offset(x: left - handle)
+                    .allowsHitTesting(false)
+                Rectangle().fill(.yellow)
+                    .frame(width: right - left + handle * 2, height: border)
+                    .offset(x: left - handle, y: h - border)
+                    .allowsHitTesting(false)
+
+                handleView(left: true)
+                    .frame(width: handle, height: h)
+                    .offset(x: left - handle)
                     .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("strip"))
-                        .onChanged { model.setStart(time($0.location.x)) })
-                handle(left: false)
-                    .offset(x: x(model.end) - 10)
+                        .onChanged { model.setStart(time($0.location.x + handle / 2)) })
+                handleView(left: false)
+                    .frame(width: handle, height: h)
+                    .offset(x: right)
                     .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("strip"))
-                        .onChanged { model.setEnd(time($0.location.x)) })
+                        .onChanged { model.setEnd(time($0.location.x - handle / 2)) })
 
-                Rectangle().fill(.white)
-                    .frame(width: 2, height: geo.size.height + 6)
-                    .offset(x: x(model.playhead) - 1, y: -3)
+                // Где сейчас
+                RoundedRectangle(cornerRadius: 1).fill(.white)
+                    .frame(width: 2, height: h)
+                    .shadow(color: .black.opacity(0.5), radius: 1)
+                    .offset(x: x(model.playhead) - 1)
                     .allowsHitTesting(false)
             }
             .coordinateSpace(name: "strip")
         }
-        .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 
-    private func handle(left: Bool) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 3).fill(.yellow)
-            Image(systemName: left ? "chevron.compact.left" : "chevron.compact.right")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.black)
-        }
-        .frame(width: 10)
-        .contentShape(Rectangle().inset(by: -6))
-        .onHover { inside in
-            if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
-        }
+    private func handleView(left: Bool) -> some View {
+        UnevenRoundedRectangle(topLeadingRadius: left ? 5 : 0, bottomLeadingRadius: left ? 5 : 0,
+                               bottomTrailingRadius: left ? 0 : 5, topTrailingRadius: left ? 0 : 5)
+            .fill(.yellow)
+            .overlay(
+                Image(systemName: left ? "chevron.compact.left" : "chevron.compact.right")
+                    .font(.system(size: 13, weight: .heavy))
+                    .foregroundStyle(.black.opacity(0.75))
+            )
+            .contentShape(Rectangle().inset(by: -6))
+            .onHover { inside in
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
     }
 }
 

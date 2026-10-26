@@ -62,8 +62,11 @@ final class Director {
         return s
     }
 
-    func id(forNote note: Int) -> Int { note - markerBaseNote + 1 }
-    func note(forId id: Int) -> Int { markerBaseNote + id - 1 }
+    /// Нота-метка → песня. Пусто — по порядку от markerBaseNote (песня N — markerBaseNote + N - 1).
+    /// У песни может быть любая нота: пропущенные на концерте песни не мешают.
+    var noteMap: [Int: Int] = [:]
+
+    func id(forNote note: Int) -> Int { noteMap.isEmpty ? note - markerBaseNote + 1 : (noteMap[note] ?? -1) }
 
     /// Ручной запуск — явное действие: снимает Logo, Blackout и Extras
     func playManually(_ id: Int, at now: Double) {

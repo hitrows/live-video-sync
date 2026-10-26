@@ -113,6 +113,7 @@ final class Show: ObservableObject {
 
     func start() {
         migrateLegacyFolder()
+        assignMissingNotes()
         applyToEngine()
         engine.urlForCue = { [weak self] id in self?.activeItem(id)?.url }
         engine.startForCue = { [weak self] id in self?.activeItem(id)?.trimStart ?? 0 }
@@ -140,7 +141,7 @@ final class Show: ObservableObject {
         preventDisplaySleep()
 
         output.onStageScreen = { [weak self] screen in self?.stageScreenFound(screen) }
-        output.choice = settings.display
+        output.choice = outputChoice
         output.live = settings.live
         engine.logo.load(settings.logoPath.map(URL.init(fileURLWithPath:)))
         if settings.live { Log.info("Трансляция включается сразу (была включена при прошлом запуске)") }
@@ -182,7 +183,64 @@ final class Show: ObservableObject {
 
     /// Экран сцены, если подключён (для Settings → Output)
     var stageScreen: NSScreen? {
-        settings.display == .window ? nil : OutputController.targetScreen(for: settings.display)
+        settings.testWindow ? nil : OutputController.targetScreen(for: settings.display)
+    }
+
+    /// Куда вывод: экран сцены или тестовое окно
+    private var outputChoice: DisplayChoice { settings.testWindow ? .window : settings.display }
+
+    /// «A200 HDMI · 1280 × 800 px» — экран и размер вывода в пикселях
+    private var testPatternTitle: String {
+        let size = engine.rootLayer.bounds.size
+        let scale = settings.testWindow ? (NSScreen.main?.backingScaleFactor ?? 1) : (stageScreen?.backingScaleFactor ?? 1)
+        let name: String
+        switch outputState {
+        case .live(let display): name = settings.testWindow ? "Test window" : display
+        default: name = settings.testWindow ? "Test window" : expectedDisplayName
+        }
+        engine.pixelScale = scale
+        return "\(name) · \(Int(size.width * scale)) × \(Int(size.height * scale)) px"
+    }
+
+    func toggleTestWindow() {
+        settings.testWindow.toggle()
+        Log.info(settings.testWindow ? "Вывод в тестовое окно" : "Вывод на экран сцены")
+    }
+
+    // MARK: - Ноты-метки
+
+    /// Нота-метка песни
+    func note(_ item: SetlistItem, in setlist: Setlist? = nil) -> Int {
+        if let n = item.note { return n }
+        let list = setlist ?? settings.setlists.first { $0.items.contains { $0.id == item.id } }
+        let index = list?.items.firstIndex { $0.id == item.id } ?? 0
+        return settings.markerBaseNote + index
+    }
+
+    /// Следующая свободная нота в сете (после самой высокой)
+    private func nextFreeNote(in setlist: Setlist) -> Int {
+        let used = setlist.items.compactMap(\.note)
+        return min(127, (used.max().map { $0 + 1 }) ?? settings.markerBaseNote)
+    }
+
+    /// Песням без ноты — ноты по порядку (старые настройки: нота = место в списке)
+    private func assignMissingNotes() {
+        for s in settings.setlists.indices where settings.setlists[s].items.contains(where: { $0.note == nil }) {
+            for i in settings.setlists[s].items.indices where settings.setlists[s].items[i].note == nil {
+                settings.setlists[s].items[i].note = settings.markerBaseNote + i
+            }
+        }
+    }
+
+    /// Сменить ноту песни; если она занята другой песней сета — поменяться с ней
+    func setNote(_ note: Int, for itemID: UUID, in setlistID: UUID) {
+        edit(setlistID) { s in
+            guard let i = s.items.firstIndex(where: { $0.id == itemID }) else { return }
+            let old = s.items[i].note
+            if let j = s.items.firstIndex(where: { $0.note == note && $0.id != itemID }) { s.items[j].note = old }
+            s.items[i].note = note
+        }
+        Log.info("Нота-метка: \(Self.noteName(note))")
     }
 
     func stageKey(_ screen: NSScreen) -> String {
@@ -537,8 +595,15 @@ final class Show: ObservableObject {
     func addFiles(_ urls: [URL], to id: UUID, at index: Int? = nil) {
         let files = urls.flatMap(expandFolder).filter(Library.isMedia)
         guard !files.isEmpty else { return }
+        guard let current = setlist(id) else { return }
+        var next = nextFreeNote(in: current)
+        let items: [SetlistItem] = files.map { url in
+            var item = SetlistItem(path: url.path)
+            item.note = next
+            next = min(127, next + 1)
+            return item
+        }
         edit(id) { s in
-            let items = files.map { SetlistItem(path: $0.path) }
             let at = min(max(0, index ?? s.items.count), s.items.count)
             s.items.insert(contentsOf: items, at: at)
         }
@@ -701,6 +766,11 @@ final class Show: ObservableObject {
             cues[i + 1] = CueInfo(id: i + 1, duration: d, start: item.marker)
         }
         if cues != director.cues { director.cues = cues }
+        var map: [Int: Int] = [:]
+        if let active = settings.active {
+            for (i, item) in active.items.enumerated() { map[note(item, in: active)] = i + 1 }
+        }
+        if map != director.noteMap { director.noteMap = map }
     }
 
     private func learned(_ id: Int, at position: Double) {
@@ -728,6 +798,15 @@ final class Show: ObservableObject {
     }
 
     private func settingsChanged(from old: Settings) {
+        // Сменили ноту первой песни — сдвинуть все ноты
+        if settings.markerBaseNote != old.markerBaseNote {
+            let delta = settings.markerBaseNote - old.markerBaseNote
+            for s in settings.setlists.indices {
+                for i in settings.setlists[s].items.indices {
+                    if let n = settings.setlists[s].items[i].note { settings.setlists[s].items[i].note = min(127, max(0, n + delta)) }
+                }
+            }
+        }
         // Правки подгонки сразу сохраняются в выбранный пресет площадки
         if settings.screenFit != old.screenFit, let id = settings.venuePreset,
            let i = settings.venuePresets.firstIndex(where: { $0.id == id }), settings.venuePresets[i].fit != settings.screenFit {
@@ -735,7 +814,7 @@ final class Show: ObservableObject {
         }
         Store.save(settings)
         applyToEngine()
-        output.choice = settings.display
+        output.choice = outputChoice
         output.live = settings.live
         if settings.live, settings.restartScreen != old.restartScreen || settings.restartImagePath != old.restartImagePath || !old.live,
            let screen = stageScreen {
@@ -798,6 +877,7 @@ final class Show: ObservableObject {
             state = .waitingForDisplay(display: expectedDisplayName)
         }
         if state != outputState { outputState = state }
+        engine.testPatternTitle = testPatternTitle
     }
 
     private func updateNowPlaying(_ out: ShowOutput) {
@@ -836,7 +916,7 @@ final class Show: ObservableObject {
         }
         if out != .extras, let next = director.nextCue(after: out), let item = activeItem(next) {
             n.next = String(format: "%02d", next) + " " + item.displayName
-                + " · marker " + Self.noteName(settings.markerBaseNote + next - 1)
+                + " · marker " + Self.noteName(note(item, in: settings.active))
         }
         if n != nowPlaying { nowPlaying = n }
         let playing = out == .extras ? extrasPlaylist.flatMap { p in n.itemID.map { (p, $0) } } : nil
@@ -853,7 +933,9 @@ final class Show: ObservableObject {
         let connections = link.connections
         let age = director.lastMessageHost.map { now - $0 }
         let midiFlowing = (age ?? 99) < 2
-        let connected = !connections.isEmpty || midiFlowing
+        // Подключение записано в сеансе, даже когда тот Mac выключен — поэтому ещё и «виден ли он в сети сейчас»
+        let visible = connections.contains { link.isVisible($0.name) }
+        let connected = midiFlowing || (!connections.isEmpty && visible)
         s.macName = connections.first?.name ?? settings.logicMac?.name
 
         let clock = director.clock

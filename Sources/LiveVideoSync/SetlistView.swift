@@ -109,7 +109,7 @@ private struct TrackList: View {
                 ContentUnavailableView {
                     Label("No Songs", systemImage: "film.stack")
                 } description: {
-                    Text("Drag song videos here. The order is the order of marker notes:\nsong 1 = \(Show.noteName(show.settings.markerBaseNote)), song 2 = \(Show.noteName(show.settings.markerBaseNote + 1)) …")
+                    Text("Drag song videos here. Each new song gets the next free marker note,\nstarting from \(Show.noteName(show.settings.markerBaseNote)). Any note can be changed in the ••• menu.")
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
@@ -206,11 +206,29 @@ private struct ItemMenu: View {
             .disabled(show.info(item).map { !$0.playable || $0.isImage } ?? true)
         Menu("Move to Position") {
             ForEach(Array(setlist.items.indices), id: \.self) { i in
-                let label = "\(i + 1) · \(Show.noteName(show.settings.markerBaseNote + i))"
+                let label = "\(i + 1)"
                 if setlist.items[i].id == item.id {
                     Button { } label: { Label(label, systemImage: "checkmark") }
                 } else {
                     Button(label) { show.moveItem(item.id, in: setlist.id, toPosition: i + 1) }
+                }
+            }
+        }
+        // Любая нота; занятая другой песней — песни меняются нотами
+        Menu("Marker Note") {
+            let current = show.note(item, in: setlist)
+            ForEach(0..<6, id: \.self) { octave in
+                Menu("C\(octave) – B\(octave)") {
+                    ForEach(0..<12, id: \.self) { k in
+                        let n = 24 + octave * 12 + k
+                        let owner = setlist.items.first { $0.id != item.id && show.note($0, in: setlist) == n }
+                        let label = Show.noteName(n) + (owner.map { " — \($0.displayName)" } ?? "")
+                        if n == current {
+                            Button { } label: { Label(label, systemImage: "checkmark") }
+                        } else {
+                            Button(label) { show.setNote(n, for: item.id, in: setlist.id) }
+                        }
+                    }
                 }
             }
         }
@@ -251,6 +269,16 @@ private struct TrackRow: View {
                 .frame(width: 28, alignment: .trailing)
             title
             Spacer(minLength: 12)
+            // Обрезанная песня — своя колонка перед нотой, все ножницы ровно друг под другом
+            Group {
+                if item.trimStart > 0 || item.trimEnd != nil {
+                    Image(systemName: "scissors")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .help("Trimmed: plays \(TrimModel.format(item.trimStart)) – \(item.trimEnd.map(TrimModel.format) ?? "end") of the file")
+                }
+            }
+            .frame(width: 18)
             markerBadge
                 .frame(width: 52, alignment: .leading)
             Text(show.duration(item).map(Show.minutes) ?? "—")
@@ -327,7 +355,7 @@ private struct TrackRow: View {
     /// Нота-метка: отдельная колонка, все плашки ровно друг под другом
     private var markerBadge: some View {
         let learned = item.marker != nil
-        return Text(Show.noteName(show.settings.markerBaseNote + number - 1))
+        return Text(Show.noteName(show.note(item, in: setlist)))
             .font(.caption2.weight(.medium).monospacedDigit())
             .foregroundStyle(learned ? .secondary : .tertiary)
             .padding(.horizontal, 5)

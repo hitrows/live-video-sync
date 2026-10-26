@@ -56,6 +56,8 @@ struct SetlistItem: Codable, Equatable, Identifiable, Hashable {
     /// Обрезка (Trim): видео идёт с trimStart и кончается в trimEnd; файл не меняется
     var trimStart: Double = 0
     var trimEnd: Double?
+    /// Нота-метка песни (любая; nil — ещё не назначена, назначит программа)
+    var note: Int?
     /// Начало песни в проекте Logic (секунды MTC) — выучено по ноте-метке.
     /// Хранится у песни: при перестановке песни её место в проекте Logic не меняется.
     var marker: Double?
@@ -84,6 +86,7 @@ struct SetlistItem: Codable, Equatable, Identifiable, Hashable {
         trimStart = try c.decodeIfPresent(Double.self, forKey: .trimStart) ?? 0
         trimEnd = try c.decodeIfPresent(Double.self, forKey: .trimEnd)
         marker = try c.decodeIfPresent(Double.self, forKey: .marker)
+        note = try c.decodeIfPresent(Int.self, forKey: .note)
     }
 }
 
@@ -163,6 +166,8 @@ struct Settings: Codable, Equatable {
     var activeSetlist: UUID?
     var logoPath: String?
     var display: DisplayChoice = .firstExternal
+    /// Вывод в окно на этом Mac вместо экрана сцены (кнопка на панели инструментов)
+    var testWindow = false
     var transition: Transition = .fade
     /// Fade out и fade in, с
     var transitionDuration: Double = 0.7
@@ -205,7 +210,7 @@ struct Settings: Codable, Equatable {
         case setlists, activeSetlist, logoPath, display, transition, transitionDuration, scale, markerBaseNote
         case live, logicMac, hideDock, hidePointer, restartScreen, restartImagePath, extrasImageDuration
         case playlists, extrasAudioDevice, extrasVolume, screenFit, venuePresets, venuePreset
-        case resolutions, originalModes, previousWallpapers, acceptOnlyLogic
+        case resolutions, originalModes, previousWallpapers, acceptOnlyLogic, testWindow
         case legacyFolderPath = "folderPath", legacyMarkers = "markers"
         case crossfade, fadeOut
     }
@@ -237,6 +242,12 @@ struct Settings: Codable, Equatable {
         originalModes = (try? c.decodeIfPresent([String: DisplayModeRef].self, forKey: .originalModes)) ?? [:]
         previousWallpapers = (try? c.decodeIfPresent([String: String].self, forKey: .previousWallpapers)) ?? [:]
         acceptOnlyLogic = (try? c.decodeIfPresent(Bool.self, forKey: .acceptOnlyLogic)) ?? true
+        testWindow = (try? c.decodeIfPresent(Bool.self, forKey: .testWindow)) ?? false
+        // Старый выбор «Window (test)» в списке экранов → кнопка тестового окна
+        if display == .window {
+            display = .firstExternal
+            testWindow = true
+        }
         legacyFolderPath = try? c.decodeIfPresent(String.self, forKey: .legacyFolderPath)
         legacyMarkers = (try? c.decodeIfPresent([String: [String: Double]].self, forKey: .legacyMarkers)) ?? [:]
         // Старые «crossfade» и «fadeOut» → переход и длительность
@@ -276,6 +287,7 @@ struct Settings: Codable, Equatable {
         try c.encode(originalModes, forKey: .originalModes)
         try c.encode(previousWallpapers, forKey: .previousWallpapers)
         try c.encode(acceptOnlyLogic, forKey: .acceptOnlyLogic)
+        try c.encode(testWindow, forKey: .testWindow)
         try c.encodeIfPresent(legacyFolderPath, forKey: .legacyFolderPath)
         if !legacyMarkers.isEmpty { try c.encode(legacyMarkers, forKey: .legacyMarkers) }
     }

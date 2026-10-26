@@ -513,6 +513,28 @@ do {
     check(partial.scale == 80 && partial.scaleX == 100 && partial.cropOn, "Screen Fit: неполный JSON читается")
 }
 
+// Любая нота у песни: карта нот, ноты без песни не мешают
+do {
+    let d = makeDirector()
+    d.noteMap = [40: 1, 60: 2, 37: 3]
+    let logic = FakeLogic(d)
+    logic.play()
+    logic.advance(1)
+    logic.note(60)
+    logic.advance(1)
+    check(d.output(at: logic.now).isSong(2, locked: true), "Ноты: нота 60 — песня 2")
+    logic.note(36)
+    logic.advance(1)
+    check(d.output(at: logic.now).isSong(2, locked: true), "Ноты: нота без песни ничего не меняет")
+    logic.stop()
+    logic.position = 3700
+    logic.play()
+    logic.advance(0.2)
+    logic.note(37)
+    logic.advance(1)
+    check(d.output(at: logic.now).isSong(3, locked: true), "Ноты: нота 37 — песня 3")
+}
+
 extension Director {
     func toggleLogoForTest() {
         stopManual()

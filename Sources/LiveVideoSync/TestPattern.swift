@@ -3,7 +3,7 @@ import AppKit
 /// Тестовая сетка для экрана сцены: сетка с координатами, рамка по краю, центр.
 /// По ней видно, какая часть картинки реально видна на экране площадки.
 enum TestPattern {
-    static func image(size: CGSize) -> CGImage? {
+    static func image(size: CGSize, title: String, pixelScale: CGFloat = 1) -> CGImage? {
         let w = max(1, Int(size.width)), h = max(1, Int(size.height))
         let image = NSImage(size: NSSize(width: w, height: h), flipped: true) { rect in
             NSColor(white: 0.08, alpha: 1).setFill()
@@ -24,9 +24,9 @@ enum TestPattern {
             let small: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium),
                                                          .foregroundColor: NSColor(white: 0.75, alpha: 1)]
             var x = 100.0
-            while x < W { ("\(Int(x))" as NSString).draw(at: NSPoint(x: x + 4, y: H / 2 + 4), withAttributes: small); x += 100 }
+            while x < W { ("\(Int(x * pixelScale))" as NSString).draw(at: NSPoint(x: x + 4, y: H / 2 + 4), withAttributes: small); x += 100 }
             var y = 100.0
-            while y < H { ("\(Int(y))" as NSString).draw(at: NSPoint(x: W / 2 + 4, y: y + 2), withAttributes: small); y += 100 }
+            while y < H { ("\(Int(y * pixelScale))" as NSString).draw(at: NSPoint(x: W / 2 + 4, y: y + 2), withAttributes: small); y += 100 }
 
             // Центр
             NSColor.systemYellow.setStroke()
@@ -45,7 +45,7 @@ enum TestPattern {
 
             let big: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: max(18, H / 24), weight: .bold),
                                                        .foregroundColor: NSColor.white]
-            let title = "\(Int(W)) × \(Int(H))" as NSString
+            let title = (title.isEmpty ? "\(Int(W)) × \(Int(H)) px" : title) as NSString
             let ts = title.size(withAttributes: big)
             title.draw(at: NSPoint(x: (W - ts.width) / 2, y: H / 2 - ts.height - 70), withAttributes: big)
             let corner: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 16, weight: .semibold),

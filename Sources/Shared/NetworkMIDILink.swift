@@ -143,6 +143,11 @@ final class NetworkMIDILink: NSObject, NetServiceBrowserDelegate, NetServiceDele
         }
     }
 
+    /// Виден ли этот Mac в сети прямо сейчас (объявляет сетевой MIDI по Bonjour)
+    func isVisible(_ name: String) -> Bool {
+        services.contains { $0.name == name }
+    }
+
     /// Подключён ли (или подключается) этот Mac
     func isConnected(_ peer: Peer) -> Bool {
         connections.contains { c in

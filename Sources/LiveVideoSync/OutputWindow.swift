@@ -120,7 +120,7 @@ final class OutputController {
                          styleMask: [.titled, .resizable, .miniaturizable], backing: .buffered, defer: false)
             w.title = "Output (test window)"
             w.setFrameAutosaveName("TestOutputWindow")
-            w.level = .floating
+            // Обычное окно, не поверх всех: иначе закрывает окна подтверждения
         } else {
             w = OutputWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
             // Выше строки меню, Dock и уведомлений

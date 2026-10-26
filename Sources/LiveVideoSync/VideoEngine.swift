@@ -221,7 +221,8 @@ final class VideoEngine {
     let contentLayer = CALayer()
     /// Обрезка (Crop) — маска контента
     private let cropMask = CALayer()
-    /// Тестовая сетка поверх всего, без Screen Fit — видно, какая часть экрана реально видна
+    /// Тестовая сетка поверх всего вывода и вместе с ним под Screen Fit:
+    /// красная рамка = край картинки — видно, как она ложится на экран площадки
     let testPatternLayer = CALayer()
     let logo = LogoPlayer()
     let slots = [SongSlot(), SongSlot()]
@@ -232,6 +233,12 @@ final class VideoEngine {
             guard testPattern != oldValue else { return }
             updateTestPattern()
         }
+    }
+    /// Подпись на сетке: экран и размер в пикселях
+    /// Пикселей на точку у экрана вывода (подписи сетки — в пикселях)
+    var pixelScale: CGFloat = 1
+    var testPatternTitle = "" {
+        didSet { if testPattern, testPatternTitle != oldValue { updateTestPattern() } }
     }
     var fadeOut = 0.7
     var fadeIn = 0.7
@@ -266,7 +273,7 @@ final class VideoEngine {
         testPatternLayer.actions = noActions
         testPatternLayer.isHidden = true
         testPatternLayer.contentsGravity = .resize
-        rootLayer.addSublayer(testPatternLayer)
+        contentLayer.addSublayer(testPatternLayer)
         rootLayer.masksToBounds = true
         applyFit()
         for layer in [logo.layer] + slots.map(\.layer) {
@@ -320,7 +327,7 @@ final class VideoEngine {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         testPatternLayer.isHidden = !testPattern
-        if testPattern { testPatternLayer.contents = TestPattern.image(size: rootLayer.bounds.size) }
+        if testPattern { testPatternLayer.contents = TestPattern.image(size: rootLayer.bounds.size, title: testPatternTitle, pixelScale: pixelScale) }
         CATransaction.commit()
         Log.info("Test Pattern: \(testPattern ? "вкл" : "выкл")")
     }
@@ -561,7 +568,6 @@ final class PreviewMirror {
         testPattern.contentsGravity = .resize
         rootLayer.addSublayer(canvas)
         canvas.addSublayer(content)
-        canvas.addSublayer(testPattern)
         func pair(_ source: AVPlayerLayer, slot: SongSlot?, parent: CALayer?) -> Pair {
             let mirror = AVPlayerLayer(player: source.player)
             mirror.videoGravity = .resize
@@ -582,6 +588,7 @@ final class PreviewMirror {
             + engine.slots.map { pair($0.layer, slot: $0, parent: nil) }
             + engine.extras.slots.map { pair($0.layer, slot: $0, parent: engine.extras.container) }
         for p in pairs { content.addSublayer(p.mirror) }
+        content.addSublayer(testPattern)
         rootLayer.actions = ["bounds": NSNull(), "position": NSNull()]
     }
 
