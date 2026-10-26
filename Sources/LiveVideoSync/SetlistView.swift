@@ -220,6 +220,18 @@ private struct ItemMenu: View {
         Button("Replace File…") { show.replaceFile(item.id, in: setlist.id) }
         Button("Reset Marker") { show.resetMarker(item.id, in: setlist.id) }
             .disabled(item.marker == nil)
+        // Как «Add to Playlist» в Музыке — файл песни в плейлист Extras
+        Menu("Add to Playlist") {
+            ForEach(show.settings.playlists) { playlist in
+                Button(playlist.name) { show.addFiles([item.url], toPlaylist: playlist.id) }
+            }
+            if !show.settings.playlists.isEmpty { Divider() }
+            Button("New Playlist") {
+                let id = show.newPlaylist()
+                show.addFiles([item.url], toPlaylist: id)
+            }
+        }
+        .disabled(show.info(item)?.missing == true)
         Button("Show in Finder") { show.showInFinder(item) }
             .disabled(show.info(item)?.missing == true)
         Divider()

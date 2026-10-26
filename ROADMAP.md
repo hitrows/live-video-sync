@@ -184,3 +184,5 @@
 ## Потом (напомнить Вите)
 - **Help как Final Cut Pro User Guide** (https://support.apple.com/guide/final-cut-pro/welcome/12.3/mac/26.6.2): оглавление слева, статьи по темам, поиск — вместо одного длинного окна.
 - **Logic → Source / Sync** (26.10.2026): таймкод может слать не только Logic (Ableton и др.). Вкладка Settings **Sync**, «Source Mac», статус «Source: … · connected», «Waiting for timecode», «Accept MIDI only from Source Mac».
+- **Перенос между Extras и сет-листом** (26.10.2026): «•••» → **Add to Playlist ▸** у песни, **Add to Setlist ▸** у файла Extras; файлы из Finder можно бросить на сет или плейлист в боковой панели.
+- **Кнопка «?»** у строки Source, когда нет связи, — открывает Help на решении проблем.

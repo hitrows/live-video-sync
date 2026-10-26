@@ -116,6 +116,11 @@ private struct Sidebar: View {
                         }
                     }
                     .tag(UIState.SidebarItem.setlist(setlist.id))
+                    // Файлы из Finder — прямо на сет в боковой панели
+                    .dropDestination(for: URL.self) { urls, _ in
+                        show.addFiles(urls, to: setlist.id)
+                        return true
+                    }
                     .contextMenu {
                         Button("Make Active") { show.makeActive(setlist.id) }
                             .disabled(setlist.id == show.settings.activeSetlist)
@@ -140,6 +145,10 @@ private struct Sidebar: View {
                         }
                     }
                     .tag(UIState.SidebarItem.playlist(playlist.id))
+                    .dropDestination(for: URL.self) { urls, _ in
+                        show.addFiles(urls, toPlaylist: playlist.id)
+                        return true
+                    }
                     .contextMenu {
                         Button("Play") { show.playPlaylist(playlist.id) }
                             .disabled(playlist.items.isEmpty)

@@ -151,6 +151,13 @@ private struct PlaylistItemMenu: View {
         Divider()
         Button("Rename") { renaming = item.id }
         Button("Replace File…") { show.replacePlaylistFile(item.id, in: playlist.id) }
+        // Файл Extras — песней в сет (получит следующую свободную ноту)
+        Menu("Add to Setlist") {
+            ForEach(show.settings.setlists) { setlist in
+                Button(setlist.name) { show.addFiles([item.url], to: setlist.id) }
+            }
+        }
+        .disabled(show.settings.setlists.isEmpty || show.media[item.path]?.missing == true)
         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
             .disabled(show.media[item.path]?.missing == true)
         Divider()
