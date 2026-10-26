@@ -172,8 +172,39 @@ struct NowPlayingPanel: View {
             .toggleStyle(.button)
             .padding(.top, 4)
 
-            StatusLine(color: logicColor, text: show.logic.line)
-                .padding(.top, 4)
+            // Источник — меню, как выбор выхода звука в Музыке; точка снаружи (меню рисует только текст)
+            HStack(spacing: 6) {
+            Circle().fill(logicColor).frame(width: 8, height: 8)
+            Menu {
+                let visible = show.linkChoices.filter { show.link.isVisible($0.name) }
+                if visible.isEmpty {
+                    Text("No Macs with network MIDI found")
+                }
+                ForEach(visible, id: \.self) { mac in
+                    Button {
+                        show.connectLogic(mac)
+                    } label: {
+                        if mac.name == show.settings.logicMac?.name {
+                            Label(mac.name, systemImage: "checkmark")
+                        } else {
+                            Text(mac.name)
+                        }
+                    }
+                }
+                if let saved = show.settings.logicMac, !visible.contains(where: { $0.name == saved.name }) {
+                    Label("\(saved.name) — not on the network", systemImage: "checkmark")
+                        .foregroundStyle(.secondary)
+                }
+                Divider()
+                SettingsLink { Text("Sync Settings…") }
+            } label: {
+                Text(show.logic.line)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Choose the Mac that sends timecode")
+            }
+            .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

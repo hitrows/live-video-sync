@@ -310,8 +310,9 @@ private struct TrackRow: View {
     @ViewBuilder
     private var leading: some View {
         if isPlaying {
-            FilmIcon(running: show.settings.live)
+            Image(systemName: "play.tv")
                 .foregroundStyle(onAir ? .red : .secondary)
+                .help(onAir ? "On the stage screen now" : "Playing (output is off)")
         } else if hovering, isActiveSet, info?.playable == true {
             Button { show.playManually(item) } label: {
                 Image(systemName: "play.fill")
@@ -376,37 +377,5 @@ private struct TrackRow: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .opacity(hovering ? 1 : 0)
-    }
-}
-
-/// Значок плёнки, по которому бегут кадры (играющая песня)
-private struct FilmIcon: View {
-    let running: Bool
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 20, paused: !running)) { context in
-            Canvas { ctx, size in
-                let w = size.width, h = size.height
-                let frame = CGRect(x: 0.5, y: 0.5, width: w - 1, height: h - 1)
-                ctx.stroke(Path(roundedRect: frame, cornerRadius: 2), with: .foreground, lineWidth: 1.2)
-                // Перфорация сверху и снизу бежит влево
-                let step: CGFloat = 4
-                let t = running ? context.date.timeIntervalSinceReferenceDate : 0
-                let shift = CGFloat((t * 12).truncatingRemainder(dividingBy: Double(step)))
-                var x = 2 - shift
-                while x < w - 2 {
-                    if x > 1.5 {
-                        ctx.fill(Path(CGRect(x: x, y: 2, width: 2, height: 2)), with: .foreground)
-                        ctx.fill(Path(CGRect(x: x, y: h - 4, width: 2, height: 2)), with: .foreground)
-                    }
-                    x += step
-                }
-                ctx.stroke(Path { p in
-                    p.move(to: CGPoint(x: 1, y: 5)); p.addLine(to: CGPoint(x: w - 1, y: 5))
-                    p.move(to: CGPoint(x: 1, y: h - 5)); p.addLine(to: CGPoint(x: w - 1, y: h - 5))
-                }, with: .foreground, lineWidth: 0.8)
-            }
-        }
-        .frame(width: 22, height: 15)
     }
 }

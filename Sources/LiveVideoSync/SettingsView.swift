@@ -193,7 +193,7 @@ private struct OutputSettings: View {
                     ForEach(ScaleMode.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
                 Toggle(isOn: $show.settings.hideDock) {
-                    RowLabel("Hide Dock on stage display", "The Dock never slides up over the video")
+                    RowLabel("Hide Dock on stage display", "While live, the pointer stays off the stage display, so the Dock can’t move there")
                 }
                 .toggleStyle(.switch)
                 Toggle("Hide pointer", isOn: $show.settings.hidePointer)

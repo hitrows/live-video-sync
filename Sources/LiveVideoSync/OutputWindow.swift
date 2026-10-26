@@ -51,6 +51,8 @@ final class OutputController {
     var onStageScreen: ((NSScreen) -> Void)?
     /// Где сейчас идёт трансляция (для монитора); nil — нигде
     private(set) var currentTarget: String?
+    /// Экран сцены, на котором сейчас вывод (не тестовое окно)
+    private(set) var currentScreen: NSScreen?
 
     private var window: NSWindow?
     private var windowIsTest = false
@@ -108,6 +110,7 @@ final class OutputController {
     private func hide() {
         window?.orderOut(nil)
         currentTarget = nil
+        currentScreen = nil
     }
 
     private func makeWindow(test: Bool) -> NSWindow {
@@ -144,6 +147,7 @@ final class OutputController {
         if !w.isVisible { w.center() }
         w.orderFront(nil)
         currentTarget = "test window"
+        currentScreen = nil
     }
 
     private func showFullscreen(on screen: NSScreen) {
@@ -156,6 +160,7 @@ final class OutputController {
             if Self.hidesPointer { moveCursorAway(from: screen) }
         }
         currentTarget = name
+        currentScreen = screen
     }
 
     static var hidesPointer: Bool { OutputView.hidePointer }

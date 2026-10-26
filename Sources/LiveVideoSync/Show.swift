@@ -48,12 +48,16 @@ struct LogicStatus: Equatable {
     var timecode: String?
     var fps: String?
     var mtcRunning = false
+    /// Выбранный источник сейчас виден в сети
+    var visible = true
 
     /// «Logic: MacBook Pro Hitrows · connected · 01:07:32:14 · 24 fps»
     var line: String {
         switch state {
         case .noSession: return "Waiting for timecode · no network MIDI session"
-        case .waiting: return macName.map { "Source: \($0) · connecting…" } ?? "Waiting for timecode"
+        case .waiting:
+            guard let macName else { return "Waiting for timecode" }
+            return "Source: \(macName) · " + (visible ? "connecting…" : "not on the network")
         case .lost: return "Source: \(macName ?? "source Mac") · connection lost"
         case .connected:
             var parts = ["Source: \(macName ?? "connected")", "connected"]
@@ -338,6 +342,25 @@ final class Show: ObservableObject {
                 Log.info("Обои экрана «\(screen.localizedName)» возвращены")
             }
         }
+    }
+
+    /// Dock переезжает на экран, где курсор упёрся в нижний край. Спрятать Dock только на одном экране macOS не даёт,
+    /// поэтому во время вывода курсор на экран сцены не пускаем — и Dock туда не попадёт. Основной экран не трогаем.
+    private func keepPointerOffStage() {
+        guard settings.live, !settings.testWindow, let stage = output.currentScreen else { return }
+        let mouse = NSEvent.mouseLocation
+        guard stage.frame.contains(mouse),
+              let other = NSScreen.screens.filter({ $0 != stage }).min(by: { distance($0.frame, mouse) < distance($1.frame, mouse) }),
+              let primary = NSScreen.screens.first else { return }
+        // Ближайшая точка соседнего экрана, на 2 pt внутрь
+        let f = other.frame.insetBy(dx: 2, dy: 2)
+        let p = CGPoint(x: min(max(mouse.x, f.minX), f.maxX), y: min(max(mouse.y, f.minY), f.maxY))
+        CGWarpMouseCursorPosition(CGPoint(x: p.x, y: primary.frame.height - p.y))
+    }
+
+    private func distance(_ r: CGRect, _ p: CGPoint) -> CGFloat {
+        let dx = max(r.minX - p.x, 0, p.x - r.maxX), dy = max(r.minY - p.y, 0, p.y - r.maxY)
+        return dx * dx + dy * dy
     }
 
     // MARK: - Screen Fit
@@ -843,6 +866,7 @@ final class Show: ObservableObject {
             extrasPlaylist = nil
         }
         preview.sync()
+        if settings.hideDock { keepPointerOffStage() }
 
         ticks += 1
         if ticks % 6 == 0 { updateStatus(out, now: now) }
@@ -943,6 +967,7 @@ final class Show: ObservableObject {
         let visible = connections.contains { link.isVisible($0.name) }
         let connected = midiFlowing || (!connections.isEmpty && visible)
         s.macName = connections.first?.name ?? settings.logicMac?.name
+        s.visible = s.macName.map(link.isVisible) ?? false
 
         let clock = director.clock
         if let pos = clock.position(at: now) {

@@ -236,7 +236,7 @@ private struct PlaylistRow: View {
     @ViewBuilder
     private var leading: some View {
         if isPlaying {
-            Image(systemName: "play.rectangle.fill")
+            Image(systemName: "play.tv")
                 .foregroundStyle(onAir ? .red : .secondary)
         } else if hovering, info?.playable == true {
             Button { show.playExtra(item, in: playlist.id) } label: { Image(systemName: "play.fill") }
