@@ -3,7 +3,7 @@ import CoreGraphics
 
 // Иконки программ в стиле macOS: «сквиркл» 824×824 на холсте 1024, мягкий градиент и тень.
 //   build/make-icons <папка Resources>
-// Пишет Resources/AppIcon.icns (плеер) и Resources/MIDILink/MIDILink.icns.
+// Пишет Resources/MIDILink/MIDILink.icns. Иконка плеера — Resources/AppIcon.icon (Icon Composer).
 
 typealias Draw = (CGContext) -> Void
 
@@ -173,5 +173,4 @@ func makeIcns(_ draw: Draw, to url: URL) throws {
 }
 
 let resources = URL(fileURLWithPath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "Resources")
-try makeIcns(playerIcon, to: resources.appendingPathComponent("AppIcon.icns"))
 try makeIcns(linkIcon, to: resources.appendingPathComponent("MIDILink/MIDILink.icns"))
