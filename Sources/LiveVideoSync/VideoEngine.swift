@@ -185,12 +185,18 @@ final class LogoPlayer {
     let layer: AVPlayerLayer
     private var looper: AVPlayerLooper?
     private(set) var url: URL?
+    /// Логотип-картинка (слой поверх кадра видео)
+    let imageLayer = CALayer()
+    private(set) var image: CGImage?
 
     init() {
         player.isMuted = true
         player.preventsDisplaySleepDuringVideoPlayback = false
         layer = AVPlayerLayer(player: player)
         layer.opacity = 0
+        imageLayer.contentsGravity = .resize
+        imageLayer.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
+        layer.addSublayer(imageLayer)
     }
 
     func load(_ url: URL?) {
@@ -199,14 +205,34 @@ final class LogoPlayer {
         looper?.disableLooping()
         looper = nil
         player.removeAllItems()
+        image = nil
+        imageLayer.contents = nil
         guard let url else { return }
+        if Library.imageExtensions.contains(url.pathExtension.lowercased()) {
+            image = SongSlot.loadImage(url)
+            imageLayer.contents = image
+            Log.info("Логотип (картинка): \(url.lastPathComponent)")
+            return
+        }
         looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: url))
         player.play()
         Log.info("Логотип: \(url.lastPathComponent)")
     }
 
+    /// Размер картинки или кадра (для рамки на экране)
+    var contentSize: CGSize? {
+        if let image { return CGSize(width: image.width, height: image.height) }
+        return player.currentItem?.presentationSize
+    }
+
+    func setFrame(_ frame: CGRect) {
+        if layer.frame != frame { layer.frame = frame }
+        let inner = CGRect(origin: .zero, size: frame.size)
+        if imageLayer.frame != inner { imageLayer.frame = inner }
+    }
+
     /// Без файла логотипа «готов» сразу — показывается чёрный
-    var isReady: Bool { url == nil || layer.isReadyForDisplay }
+    var isReady: Bool { url == nil || image != nil || layer.isReadyForDisplay }
 }
 
 /// Видеодвижок: что видно на экране и плавные переходы между этим.
@@ -355,8 +381,7 @@ final class VideoEngine {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         // Пока размер неизвестен — по пропорциям экрана, кадра всё равно ещё нет
-        let logoFrame = Self.videoFrame(videoSize: logo.player.currentItem?.presentationSize ?? .zero, in: bounds, mode: scale)
-        if logo.layer.frame != logoFrame { logo.layer.frame = logoFrame }
+        logo.setFrame(Self.videoFrame(videoSize: logo.contentSize ?? .zero, in: bounds, mode: scale))
         for slot in slots {
             slot.setFrame(Self.videoFrame(videoSize: slot.contentSize ?? .zero, in: bounds, mode: scale))
         }
@@ -568,13 +593,13 @@ final class PreviewMirror {
         testPattern.contentsGravity = .resize
         rootLayer.addSublayer(canvas)
         canvas.addSublayer(content)
-        func pair(_ source: AVPlayerLayer, slot: SongSlot?, parent: CALayer?) -> Pair {
+        func pair(_ source: AVPlayerLayer, slot: SongSlot?, parent: CALayer?, image sourceImage: CALayer? = nil) -> Pair {
             let mirror = AVPlayerLayer(player: source.player)
             mirror.videoGravity = .resize
             mirror.opacity = 0
             mirror.actions = noActions
             var image: CALayer?
-            if slot != nil {
+            if slot != nil || sourceImage != nil {
                 // У AVPlayerLayer свои внутренние слои — картинку берём прямо из слота
                 let l = CALayer()
                 l.contentsGravity = .resize
@@ -582,9 +607,9 @@ final class PreviewMirror {
                 mirror.addSublayer(l)
                 image = l
             }
-            return Pair(source: source, mirror: mirror, image: image, sourceImage: slot?.imageLayer, parent: parent)
+            return Pair(source: source, mirror: mirror, image: image, sourceImage: sourceImage ?? slot?.imageLayer, parent: parent)
         }
-        pairs = [pair(engine.logo.layer, slot: nil, parent: nil)]
+        pairs = [pair(engine.logo.layer, slot: nil, parent: nil, image: engine.logo.imageLayer)]
             + engine.slots.map { pair($0.layer, slot: $0, parent: nil) }
             + engine.extras.slots.map { pair($0.layer, slot: $0, parent: engine.extras.container) }
         for p in pairs { content.addSublayer(p.mirror) }

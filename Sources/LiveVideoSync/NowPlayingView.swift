@@ -161,12 +161,11 @@ struct NowPlayingPanel: View {
                             help: "Logo — held until Resume Sync (⌘G)", action: show.toggleLogo)
                 ControlIcon(symbol: "eye.slash", isOn: show.manualBlack, label: "Blackout",
                             help: "Blackout — black screen until Resume Sync (⌘B)", action: show.toggleBlackout)
-                // Действие, а не переключатель: акцентом не красится; неактивно, когда возвращать нечего
-                ControlIcon(symbol: "link", isOn: false, label: "Resume Sync",
+                // Включён — экран идёт за источником; выключен — ручной режим. Нажать — вернуться к источнику
+                ControlIcon(symbol: "link", isOn: !show.isManual, label: "Resume Sync",
                             help: show.isManual ? "Resume Sync — back to what the source plays now (⌘R)"
-                                                : "Resume Sync — already following the source",
+                                                : "Following the source",
                             action: show.resumeSync)
-                    .disabled(!show.isManual)
             }
             .padding(.vertical, 4)
 
@@ -263,7 +262,6 @@ struct StatusLine: View {
 
 /// Кнопка-значок в стиле плеера Apple: без плашки, крупный значок, при наведении ярче
 struct ControlIcon: View {
-    @Environment(\.isEnabled) private var isEnabled
     let symbol: String
     let isOn: Bool
     let label: String
@@ -276,8 +274,7 @@ struct ControlIcon: View {
             Image(systemName: isOn && NSImage(systemSymbolName: symbol + ".fill", accessibilityDescription: nil) != nil
                   ? symbol + ".fill" : symbol)
                 .font(.system(size: 20, weight: .regular))
-                .foregroundStyle(isOn ? Color.accentColor
-                                 : Color.primary.opacity(!isEnabled ? 0.25 : hovering ? 1 : 0.75))
+                .foregroundStyle(isOn ? Color.accentColor : Color.primary.opacity(hovering ? 1 : 0.75))
                 .frame(width: 32, height: 28)
                 .contentShape(Rectangle())
         }

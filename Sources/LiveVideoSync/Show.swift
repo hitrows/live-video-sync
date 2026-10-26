@@ -730,9 +730,15 @@ final class Show: ObservableObject {
         setlist.items.compactMap(duration).reduce(0, +)
     }
 
+    /// Set as Logo — из правого щелчка у файла Extras
+    func setLogo(_ path: String) {
+        settings.logoPath = path
+        Log.info("Логотип: \(URL(fileURLWithPath: path).lastPathComponent)")
+    }
+
     func chooseLogo() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.movie]
+        panel.allowedContentTypes = [.movie, .image]
         panel.prompt = "Use as Logo"
         if let path = settings.logoPath { panel.directoryURL = URL(fileURLWithPath: path).deletingLastPathComponent() }
         if panel.runModal() == .OK, let url = panel.url { settings.logoPath = url.path }

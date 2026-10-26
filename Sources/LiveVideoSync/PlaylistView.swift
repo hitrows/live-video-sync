@@ -158,6 +158,13 @@ private struct PlaylistItemMenu: View {
         Button("Play") { show.playExtra(item, in: playlist.id) }
         Button("Play from Here") { show.playPlaylist(playlist.id, from: item.id) }
         Divider()
+        if show.settings.logoPath == item.path {
+            Button { } label: { Label("Set as Logo", systemImage: "checkmark") }
+        } else {
+            Button("Set as Logo") { show.setLogo(item.path) }
+                .disabled(show.media[item.path]?.playable != true)
+        }
+        Divider()
         Button("Rename") { renaming = item.id }
         Button("Replace File…") { show.replacePlaylistFile(item.id, in: playlist.id) }
         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
@@ -195,6 +202,12 @@ private struct PlaylistRow: View {
             leading
                 .frame(width: 28, alignment: .trailing)
             title
+            // Этот файл — логотип: тот же значок, что у кнопки Logo
+            if show.settings.logoPath == item.path {
+                Image(systemName: "sparkles.rectangle.stack")
+                    .foregroundStyle(.secondary)
+                    .help("This file is the logo")
+            }
             if info?.hasAudio == true {
                 Image(systemName: "speaker.wave.2")
                     .foregroundStyle(.secondary)
