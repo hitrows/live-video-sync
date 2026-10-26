@@ -263,7 +263,7 @@ struct Banners: View {
             }
             if case .waitingForDisplay(let name) = show.outputState {
                 Banner(symbol: "display.trianglebadge.exclamationmark",
-                       text: "Stage display not found. Connect \(name) — the show comes back on it by itself.",
+                       text: "Stage display not found. Connect \(name == "Stage display" ? "the stage display" : name) — the show comes back on it by itself.",
                        button: "Display Settings…") {
                     NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Displays-Settings.extension")!)
                 }

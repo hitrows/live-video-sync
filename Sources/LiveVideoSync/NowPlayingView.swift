@@ -155,22 +155,21 @@ struct NowPlayingPanel: View {
                     .lineLimit(1)
             }
 
-            HStack(spacing: 8) {
-                Toggle("Logo", isOn: Binding(get: { show.manualLogo }, set: { _ in show.toggleLogo() }))
-                    .help("Show the logo until Resume Sync (⌘G)")
-                Toggle("Blackout", isOn: Binding(get: { show.manualBlack }, set: { _ in show.toggleBlackout() }))
-                    .help("Black screen until Resume Sync (⌘B)")
+            // Как в плеере Apple: только значки; включённый — залитый и синий, название — в подсказке
+            HStack(spacing: 20) {
+                ControlIcon(symbol: "sparkles.rectangle.stack", isOn: show.manualLogo, label: "Logo",
+                            help: "Logo — held until Resume Sync (⌘G)", action: show.toggleLogo)
+                ControlIcon(symbol: "eye.slash", isOn: show.manualBlack, label: "Blackout",
+                            help: "Blackout — black screen until Resume Sync (⌘B)", action: show.toggleBlackout)
+                // Только в ручном режиме, как «Live» в TV, когда отстал от эфира
                 if show.isManual {
-                    Button("Resume Sync", action: show.resumeSync)
-                        .buttonStyle(.borderedProminent)
-                        .help("Back to what the source plays now (⌘R)")
-                } else {
-                    Button("Resume Sync", action: show.resumeSync)
-                        .disabled(true)
+                    ControlIcon(symbol: "link", isOn: true, label: "Resume Sync",
+                                help: "Resume Sync — back to what the source plays now (⌘R)", action: show.resumeSync)
+                        .transition(.opacity)
                 }
             }
-            .toggleStyle(.button)
-            .padding(.top, 4)
+            .animation(.easeOut(duration: 0.15), value: show.isManual)
+            .padding(.vertical, 4)
 
             // Источник — меню, как выбор выхода звука в Музыке; точка снаружи (меню рисует только текст)
             HStack(spacing: 6) {
@@ -260,5 +259,31 @@ struct StatusLine: View {
             Text(text).lineLimit(1)
         }
         .foregroundStyle(.secondary)
+    }
+}
+
+/// Кнопка-значок в стиле плеера Apple: без плашки, крупный значок, при наведении ярче
+struct ControlIcon: View {
+    let symbol: String
+    let isOn: Bool
+    let label: String
+    let help: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: isOn && NSImage(systemSymbolName: symbol + ".fill", accessibilityDescription: nil) != nil
+                  ? symbol + ".fill" : symbol)
+                .font(.system(size: 20, weight: .regular))
+                .foregroundStyle(isOn ? Color.accentColor : Color.primary.opacity(hovering ? 1 : 0.75))
+                .frame(width: 32, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(help)
+        .accessibilityLabel(label)
+        .accessibilityValue(isOn ? "On" : "Off")
     }
 }
